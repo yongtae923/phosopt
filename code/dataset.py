@@ -25,14 +25,11 @@ class SplitConfig:
 
 
 def normalize_target_map(target_map: np.ndarray, eps: float = 1e-8) -> np.ndarray:
-    """Normalize map with max-scaling then sum-to-one (same policy as forward simulator)."""
+    """Normalize map with max-scaling to [0, 1] range."""
     arr = np.asarray(target_map, dtype=np.float32).copy()
     max_val = float(arr.max())
     if max_val > eps:
         arr /= max_val
-    total = float(arr.sum())
-    if total > eps:
-        arr /= total
     return arr
 
 
@@ -113,6 +110,7 @@ def load_letters_phosphene_splits(
     seed: int = 42,
     val_ratio_from_train: float = 0.1,
     max_train_samples: int | None = None,
+    max_val_samples: int | None = None,
     max_test_samples: int | None = None,
 ) -> tuple[Subset, Subset, Subset]:
     """
@@ -138,6 +136,8 @@ def load_letters_phosphene_splits(
 
     if max_train_samples is not None:
         train_indices = train_indices[: max(1, int(max_train_samples))]
+    if max_val_samples is not None:
+        val_indices = val_indices[: max(1, int(max_val_samples))]
     if max_test_samples is not None:
         test_indices = list(range(min(len(test_ds), max(1, int(max_test_samples)))))
         test_subset = Subset(test_ds, test_indices)

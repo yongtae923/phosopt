@@ -9,17 +9,7 @@ conda env remove -n phosopt -y
 conda env create -f environment.yml
 conda activate phosopt
 python -c "import torch, nibabel, trimesh; print('imports_ok'); print('cuda=', torch.cuda.is_available())"
-python code/train.py \
-  --maps-npz data/letters/emnist_letters_phosphenes.npz \
-  --retinotopy-dir data/fmri/100610 \
-  --hemisphere LH \
-  --subject-id s100610 \
-  --max-train-samples 5000 \
-  --max-test-samples 1000 \
-  --epochs 50 \
-  --batch-size 8 \
-  --lr 1e-3 \
-  --save-dir data/output/inverse_training
+python code/train.py --maps-npz data/letters/emnist_letters_phosphenes.npz --retinotopy-dir data/fmri/100610 --hemisphere LH --subject-id s100610 --max-train-samples 5000 --max-test-samples 1000 --epochs 50 --batch-size 8 --lr 1e-3 --save-dir data/output/inverse_training
 ```
 
 Expected output files:

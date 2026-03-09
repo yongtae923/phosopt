@@ -11,7 +11,7 @@ class InverseModel(nn.Module):
     def __init__(
         self,
         in_channels: int = 1,
-        latent_dim: int = 128,
+        latent_dim: int = 256,
         electrode_dim: int = 1000,
         bounds: ParameterBounds | None = None,
     ) -> None:

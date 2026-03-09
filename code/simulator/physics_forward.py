@@ -47,9 +47,6 @@ def normalize_phosphene_map(arr: np.ndarray) -> np.ndarray:
     max_val = np.max(arr)
     if max_val > 0:
         arr /= max_val
-    total = np.sum(arr)
-    if total > 0:
-        arr /= total
     return arr.astype(np.float32)
 
 

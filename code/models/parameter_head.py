@@ -31,12 +31,48 @@ class ParameterBounds:
         return low, high
 
 
+class ContinuousHead(nn.Module):
+    """Predicts 4 bounded continuous implant parameters."""
+
+    def __init__(self, latent_dim: int, bounds: ParameterBounds | None = None) -> None:
+        super().__init__()
+        self.bounds = bounds or ParameterBounds()
+        self.net = nn.Sequential(
+            nn.Linear(latent_dim, 256),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 4),
+        )
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        raw = self.net(z)
+        low, high = self.bounds.as_tensor(raw.device)
+        return low + (high - low) * torch.sigmoid(raw)
+
+
+class ElectrodeHead(nn.Module):
+    """Predicts 1000 electrode logits (soft weights)."""
+
+    def __init__(self, latent_dim: int, electrode_dim: int = 1000) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(latent_dim, 512),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, electrode_dim),
+        )
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        return self.net(z)
+
+
+# Backward-compatible alias
 class ParameterHead(nn.Module):
-    """
-    Multi-head predictor:
-      - 4 bounded continuous implant parameters
-      - 1000 electrode logits
-    """
+    """Combined head wrapping ContinuousHead + ElectrodeHead."""
 
     def __init__(
         self,
@@ -45,26 +81,8 @@ class ParameterHead(nn.Module):
         bounds: ParameterBounds | None = None,
     ) -> None:
         super().__init__()
-        self.bounds = bounds or ParameterBounds()
-        self.param_head = nn.Sequential(
-            nn.Linear(latent_dim, 128),
-            nn.ReLU(inplace=True),
-            nn.Linear(128, 4),
-        )
-        self.electrode_head = nn.Sequential(
-            nn.Linear(latent_dim, 512),
-            nn.ReLU(inplace=True),
-            nn.Linear(512, electrode_dim),
-        )
-
-    def _bound_params(self, raw_params: torch.Tensor) -> torch.Tensor:
-        # sigmoid + affine enforces physical parameter range.
-        low, high = self.bounds.as_tensor(raw_params.device)
-        unit = torch.sigmoid(raw_params)
-        return low + (high - low) * unit
+        self.continuous = ContinuousHead(latent_dim, bounds)
+        self.electrode = ElectrodeHead(latent_dim, electrode_dim)
 
     def forward(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        raw_params = self.param_head(z)
-        params = self._bound_params(raw_params)
-        electrode_logits = self.electrode_head(z)
-        return params, electrode_logits
+        return self.continuous(z), self.electrode(z)

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
+
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -18,6 +21,7 @@ if str(CODE_DIR) not in sys.path:
 from dataset import PhospheneDataset, SplitConfig, load_letters_phosphene_splits, make_splits
 from loss.losses import LossConfig
 from models.inverse_model import InverseModel
+from simulator.physics_forward_torch import DifferentiableSimulator
 from simulator.simulator_wrapper import NumpySimulatorAdapter
 from trainer import (
     TrainConfig,
@@ -29,7 +33,14 @@ from trainer import (
 
 
 def _get_device() -> torch.device:
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        try:
+            t = torch.zeros(1, device="cuda")
+            _ = t + t
+            return torch.device("cuda")
+        except Exception:
+            print("[WARNING] CUDA detected but GPU kernels failed. Falling back to CPU.")
+    return torch.device("cpu")
 
 
 def _get_cpu_worker_count() -> int:
@@ -66,6 +77,7 @@ def parse_args() -> argparse.Namespace:
         help="Validation split ratio from train split when using maps-npz.",
     )
     parser.add_argument("--max-train-samples", type=int, default=None, help="Optional cap for train samples")
+    parser.add_argument("--max-val-samples", type=int, default=None, help="Optional cap for val samples")
     parser.add_argument("--max-test-samples", type=int, default=None, help="Optional cap for test samples")
     parser.add_argument("--subject-id", type=str, default="single_subject", help="Single-subject run identifier")
     parser.add_argument("--retinotopy-dir", type=Path, required=True, help="Retinotopy directory with mgz files")
@@ -76,6 +88,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--save-dir", type=Path, default=PROJECT_ROOT / "data" / "output" / "inverse_training")
     parser.add_argument("--valid-electrode-mask", type=Path, default=None, help="Optional 1000-dim mask .npy")
+    parser.add_argument(
+        "--simulator",
+        choices=["diff", "numpy"],
+        default="diff",
+        help="Simulator backend: 'diff' (differentiable torch, default) or 'numpy' (debug only).",
+    )
+    parser.add_argument("--map-size", type=int, default=256, help="Output map resolution for diff simulator")
     parser.add_argument(
         "--allow-nondiff-training",
         action="store_true",
@@ -127,6 +146,7 @@ def main() -> None:
                 seed=args.seed,
                 val_ratio_from_train=args.val_ratio_from_train,
                 max_train_samples=args.max_train_samples,
+                max_val_samples=args.max_val_samples,
                 max_test_samples=args.max_test_samples,
             )
         else:
@@ -187,12 +207,21 @@ def main() -> None:
     )
     _print_runtime_info(device=device, num_workers=num_workers)
 
-    model = InverseModel(in_channels=1, latent_dim=128, electrode_dim=1000)
+    model = InverseModel(in_channels=1, latent_dim=256, electrode_dim=1000)
 
-    # Default implementation path uses the existing numpy simulator adapter.
-    simulator = NumpySimulatorAdapter(data_dir=args.retinotopy_dir, hemisphere=args.hemisphere)
+    if args.simulator == "diff":
+        print(f"Using differentiable simulator (map_size={args.map_size})")
+        simulator = DifferentiableSimulator(
+            data_dir=args.retinotopy_dir,
+            hemisphere=args.hemisphere,
+            map_size=args.map_size,
+        )
+    else:
+        print("Using numpy simulator (non-differentiable, debug only)")
+        simulator = NumpySimulatorAdapter(data_dir=args.retinotopy_dir, hemisphere=args.hemisphere)
     loss_config = LossConfig(
         recon_weight=1.0,
+        dice_weight=0.5,
         sparsity_weight=1e-3,
         param_prior_weight=1e-4,
         invalid_region_weight=1e-3,
@@ -202,6 +231,7 @@ def main() -> None:
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
+        weight_decay=1e-4,
         grad_clip_norm=1.0,
         allow_nondiff_training=args.allow_nondiff_training,
         refinement_steps=0,
