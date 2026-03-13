@@ -36,6 +36,7 @@ from trainer import (
     evaluate_four_param_baseline,
     evaluate_inverse_model,
     evaluate_random_baseline,
+    load_checkpoint,
     train_inverse_model,
 )
 
@@ -118,6 +119,17 @@ def parse_args() -> argparse.Namespace:
         "--allow-nondiff-training",
         action="store_true",
         help="Allow training with numpy simulator (debug only).",
+    )
+    parser.add_argument(
+        "--resume",
+        type=Path,
+        default=None,
+        help="Path to checkpoint .pt file. Default: auto-detect from save-dir.",
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Force fresh training, ignore existing checkpoints.",
     )
     return parser.parse_args()
 
@@ -266,6 +278,31 @@ def main() -> None:
     )
 
     valid_mask = _load_valid_electrode_mask(args.valid_electrode_mask, device=device)
+
+    # Checkpoint directory (always active)
+    checkpoint_dir = args.save_dir / f"{args.subject_id}_checkpoints"
+
+    # Auto-resume: find existing checkpoint unless --no-resume
+    resume_ckpt = None
+    if not args.no_resume:
+        ckpt_path = args.resume
+        if ckpt_path is None:
+            auto_path = checkpoint_dir / "checkpoint_latest.pt"
+            if auto_path.exists():
+                ckpt_path = auto_path
+                print(f"[Auto-resume] Found checkpoint: {ckpt_path}", flush=True)
+        if ckpt_path is not None:
+            if not ckpt_path.exists():
+                raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+            print(f"Loading checkpoint: {ckpt_path}", flush=True)
+            resume_ckpt = load_checkpoint(ckpt_path, model, device)
+            completed = resume_ckpt["epoch"] + 1
+            print(f"Checkpoint loaded: epoch {completed}/{args.epochs} completed", flush=True)
+            if completed >= args.epochs:
+                print(f"Already completed {completed} epochs (target={args.epochs}). "
+                      f"Use --epochs {completed + 10} to train more, or --no-resume for fresh start.")
+                return
+
     print("Starting training...", flush=True)
     history = train_inverse_model(
         model=model,
@@ -275,6 +312,8 @@ def main() -> None:
         loss_config=loss_config,
         train_config=train_config,
         valid_electrode_mask=valid_mask,
+        checkpoint_dir=checkpoint_dir,
+        resume_checkpoint=resume_ckpt,
     )
 
     test_metrics = evaluate_inverse_model(

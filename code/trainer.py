@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -57,6 +58,37 @@ def _run_refinement(
     return params, e.detach()
 
 
+def _save_checkpoint(
+    path: Path,
+    epoch: int,
+    model: nn.Module,
+    optimizer: AdamW,
+    scheduler: ReduceLROnPlateau,
+    history: dict[str, list[float]],
+    best_val_mse: float,
+) -> None:
+    torch.save(
+        {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "history": history,
+            "best_val_mse": best_val_mse,
+        },
+        path,
+    )
+
+
+def load_checkpoint(
+    path: Path, model: nn.Module, device: torch.device,
+) -> dict[str, Any]:
+    """Load checkpoint and return metadata. Model weights are restored in-place."""
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    model.load_state_dict(ckpt["model_state_dict"])
+    return ckpt
+
+
 def train_inverse_model(
     model: nn.Module,
     simulator: nn.Module,
@@ -65,6 +97,8 @@ def train_inverse_model(
     loss_config: LossConfig,
     train_config: TrainConfig,
     valid_electrode_mask: torch.Tensor | None = None,
+    checkpoint_dir: Path | None = None,
+    resume_checkpoint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     dev = _device()
     model = model.to(dev)
@@ -77,12 +111,15 @@ def train_inverse_model(
         )
 
     shared_raw = [model._shared_params_raw] if hasattr(model, "_shared_params_raw") else []
-    network_params = [p for p in model.parameters() if p is not model._shared_params_raw]
+    if shared_raw:
+        network_params = [p for p in model.parameters() if p is not model._shared_params_raw]
+    else:
+        network_params = list(model.parameters())
     opt = AdamW(
         [
             {"params": network_params, "lr": train_config.lr},
             {"params": shared_raw, "lr": train_config.shared_params_lr, "weight_decay": 0.0},
-        ],
+        ] if shared_raw else [{"params": network_params, "lr": train_config.lr}],
         weight_decay=train_config.weight_decay,
     )
     scheduler = ReduceLROnPlateau(
@@ -91,6 +128,10 @@ def train_inverse_model(
         factor=train_config.scheduler_factor,
         patience=train_config.scheduler_patience,
     )
+
+    # Defaults
+    start_epoch = 0
+    best_val_mse = float("inf")
     history: dict[str, list[float]] = {
         "train_total": [],
         "train_recon": [],
@@ -99,10 +140,24 @@ def train_inverse_model(
         "val_hellinger": [],
     }
 
+    # Restore from checkpoint
+    if resume_checkpoint is not None:
+        start_epoch = resume_checkpoint["epoch"] + 1
+        history = resume_checkpoint["history"]
+        best_val_mse = resume_checkpoint.get("best_val_mse", float("inf"))
+        opt.load_state_dict(resume_checkpoint["optimizer_state_dict"])
+        scheduler.load_state_dict(resume_checkpoint["scheduler_state_dict"])
+        print(f"[Resume] Continuing from epoch {start_epoch + 1}/{train_config.epochs} "
+              f"(best_val_mse={best_val_mse:.4e})")
+
+    if checkpoint_dir is not None:
+        checkpoint_dir = Path(checkpoint_dir)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {n_params:,}")
 
-    for epoch in range(train_config.epochs):
+    for epoch in range(start_epoch, train_config.epochs):
         model.train()
         total_acc = 0.0
         recon_acc = 0.0
@@ -190,6 +245,11 @@ def train_inverse_model(
 
         scheduler.step(val["mse"])
 
+        # Track best
+        is_best = val["mse"] < best_val_mse
+        if is_best:
+            best_val_mse = val["mse"]
+
         sp = model.shared_params.detach().cpu() if hasattr(model, "shared_params") else None
         sp_str = (
             f"[a={sp[0]:.1f} b={sp[1]:.1f} o={sp[2]:.1f} s={sp[3]:.1f}]"
@@ -203,6 +263,7 @@ def train_inverse_model(
                 f"loss={avg_total:.4e} mse={avg_recon:.4e} "
                 f"val_mse={val['mse']:.4e} val_dice={val['dice']:.4f} "
                 f"params={sp_str} cuda={mem:.0f}MiB"
+                f"{' *best*' if is_best else ''}"
             )
         else:
             print(
@@ -210,7 +271,17 @@ def train_inverse_model(
                 f"loss={avg_total:.4e} mse={avg_recon:.4e} "
                 f"val_mse={val['mse']:.4e} val_dice={val['dice']:.4f} "
                 f"params={sp_str} (CPU)"
+                f"{' *best*' if is_best else ''}"
             )
+
+        # Save checkpoint every epoch
+        if checkpoint_dir is not None:
+            ckpt_path = checkpoint_dir / "checkpoint_latest.pt"
+            _save_checkpoint(ckpt_path, epoch, model, opt, scheduler, history, best_val_mse)
+            if is_best:
+                best_path = checkpoint_dir / "checkpoint_best.pt"
+                _save_checkpoint(best_path, epoch, model, opt, scheduler, history, best_val_mse)
+                print(f"  [ckpt] Saved best checkpoint (val_mse={best_val_mse:.4e})")
 
     return history
 
