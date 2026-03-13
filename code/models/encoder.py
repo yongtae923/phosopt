@@ -1,69 +1,84 @@
 from __future__ import annotations
 
+from typing import List
+
 import torch
 from torch import nn
 
 
+def _conv_block(
+    in_ch: int,
+    out_ch: int,
+    kernel_size: int = 3,
+    stride: int = 1,
+    padding: int = 1,
+    pool: nn.Module | None = None,
+) -> List[nn.Module]:
+    """Conv-BN-LeakyReLU block, optionally followed by a pooling layer."""
+    layers: List[nn.Module] = [
+        nn.Conv2d(in_ch, out_ch, kernel_size, stride, padding, bias=False),
+        nn.BatchNorm2d(out_ch),
+        nn.LeakyReLU(inplace=True),
+    ]
+    if pool is not None:
+        layers.append(pool)
+    return layers
+
+
 class ResidualBlock(nn.Module):
-    """Conv-BN-ReLU x2 with skip connection."""
+    """Conv-BN-LeakyReLU x2 with skip connection (E2E style)."""
 
     def __init__(self, channels: int) -> None:
         super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv2d(channels, channels, 3, padding=1, bias=False),
-            nn.BatchNorm2d(channels),
-            nn.ReLU(),
-            nn.Conv2d(channels, channels, 3, padding=1, bias=False),
-            nn.BatchNorm2d(channels),
-        )
-        self.relu = nn.ReLU()
+        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.relu = nn.LeakyReLU(inplace=True)
+        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.bn2 = nn.BatchNorm2d(channels)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.relu(self.block(x) + x)
-
-
-class DownBlock(nn.Module):
-    """Downsample: Conv(stride=2)-BN-ReLU + ResidualBlock."""
-
-    def __init__(self, in_ch: int, out_ch: int) -> None:
-        super().__init__()
-        self.down = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, 3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(out_ch),
-            nn.ReLU(),
-        )
-        self.res = ResidualBlock(out_ch)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.res(self.down(x))
+        residual = x
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += residual
+        return self.relu(out)
 
 
 class Encoder(nn.Module):
     """
-    ResNet-style encoder for phosphene maps.
-    Preserves spatial info through 5 stages before final pooling.
-    1×256×256 → 32→64→128→256→256 → AdaptiveAvgPool → Linear → latent_dim
+    E2E-style encoder adapted for 256x256 phosphene maps.
+
+    Based on the basecode E2E_Encoder, scaled up for 256x256 input
+    and modified to output a latent vector (instead of raw electrode
+    amplitudes) for downstream ParameterHead consumption.
+
+    Spatial path:
+      256 --[conv]--> 256 --[pool]--> 128 --[pool]--> 64 --[pool]--> 32
+      --> ResBlock x4 --> conv reduce --> flatten(32x32=1024) --> Linear --> latent_dim
+
+    Channel path:
+      in_channels -> 16 -> 32 -> 64 -> 128 -> (ResBlock x4) -> 64 -> 1
     """
 
     def __init__(self, in_channels: int = 1, latent_dim: int = 256) -> None:
         super().__init__()
-        self.stem = nn.Sequential(
-            nn.Conv2d(in_channels, 32, 7, stride=2, padding=3, bias=False),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
+        self.features = nn.Sequential(
+            *_conv_block(in_channels, 16),
+            *_conv_block(16, 32, pool=nn.MaxPool2d(2)),
+            *_conv_block(32, 64, pool=nn.MaxPool2d(2)),
+            *_conv_block(64, 128, pool=nn.MaxPool2d(2)),
+            ResidualBlock(128),
+            ResidualBlock(128),
+            ResidualBlock(128),
+            ResidualBlock(128),
+            *_conv_block(128, 64),
+            nn.Conv2d(64, 1, 3, padding=1),
         )
-        self.stage1 = DownBlock(32, 64)     # 64×64
-        self.stage2 = DownBlock(64, 128)    # 32×32
-        self.stage3 = DownBlock(128, 256)   # 16×16
-        self.stage4 = DownBlock(256, 256)   # 8×8
-        self.pool = nn.AdaptiveAvgPool2d(1)
-        self.proj = nn.Linear(256, latent_dim)
+        self.head = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(32 * 32, latent_dim),
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = self.stem(x)    # 128×128
-        h = self.stage1(h)  # 64×64
-        h = self.stage2(h)  # 32×32
-        h = self.stage3(h)  # 16×16
-        h = self.stage4(h)  # 8×8
-        h = self.pool(h).flatten(start_dim=1)
-        return self.proj(h)
+        h = self.features(x)
+        return self.head(h)

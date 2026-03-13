@@ -18,6 +18,7 @@ class TrainConfig:
     epochs: int = 100
     batch_size: int = 8
     lr: float = 3e-4
+    shared_params_lr: float = 1e-2
     weight_decay: float = 1e-4
     grad_clip_norm: float = 1.0
     allow_nondiff_training: bool = False
@@ -39,20 +40,21 @@ def _run_refinement(
     steps: int,
     lr: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Refine only electrode_logits per-image; params are shared and untouched."""
     if steps <= 0:
         return params, electrode_logits
 
     from torch.optim import Adam
-    p = params.detach().clone().requires_grad_(True)
     e = electrode_logits.detach().clone().requires_grad_(True)
-    opt = Adam([p, e], lr=lr)
+    opt = Adam([e], lr=lr)
+    p_detached = params.detach()
     for _ in range(steps):
-        recon = simulator(p, e)
+        recon = simulator(p_detached, e)
         loss = torch.mean((recon - target) ** 2)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
-    return p.detach(), e.detach()
+    return params, e.detach()
 
 
 def train_inverse_model(
@@ -74,9 +76,13 @@ def train_inverse_model(
             "Use differentiable simulator or set allow_nondiff_training=True for debugging only."
         )
 
+    shared_raw = [model._shared_params_raw] if hasattr(model, "_shared_params_raw") else []
+    network_params = [p for p in model.parameters() if p is not model._shared_params_raw]
     opt = AdamW(
-        model.parameters(),
-        lr=train_config.lr,
+        [
+            {"params": network_params, "lr": train_config.lr},
+            {"params": shared_raw, "lr": train_config.shared_params_lr, "weight_decay": 0.0},
+        ],
         weight_decay=train_config.weight_decay,
     )
     scheduler = ReduceLROnPlateau(
@@ -143,8 +149,14 @@ def train_inverse_model(
                 ) ** 0.5
                 elec_prob = torch.sigmoid(electrode_logits)
                 lr_now = opt.param_groups[0]["lr"]
+                sp = model.shared_params.detach().cpu() if hasattr(model, "shared_params") else None
+                sp_str = (
+                    f"a={sp[0]:.1f} b={sp[1]:.1f} o={sp[2]:.1f} s={sp[3]:.1f}"
+                    if sp is not None else "N/A"
+                )
                 print(
-                    f"  [diag] target:[{target.min():.3f},{target.max():.3f}] "
+                    f"  [diag] params=[{sp_str}] "
+                    f"target:[{target.min():.3f},{target.max():.3f}] "
                     f"recon:[{recon.min():.3f},{recon.max():.3f}] "
                     f"elec:[{elec_prob.min():.3f},{elec_prob.max():.3f}] "
                     f"grad={grad_norm:.2e} lr={lr_now:.1e} "
@@ -178,19 +190,26 @@ def train_inverse_model(
 
         scheduler.step(val["mse"])
 
+        sp = model.shared_params.detach().cpu() if hasattr(model, "shared_params") else None
+        sp_str = (
+            f"[a={sp[0]:.1f} b={sp[1]:.1f} o={sp[2]:.1f} s={sp[3]:.1f}]"
+            if sp is not None else ""
+        )
+
         if dev.type == "cuda":
             mem = torch.cuda.memory_allocated(dev) / (1024**2)
             print(
                 f"[Epoch {epoch + 1}/{train_config.epochs}] "
                 f"loss={avg_total:.4e} mse={avg_recon:.4e} "
                 f"val_mse={val['mse']:.4e} val_dice={val['dice']:.4f} "
-                f"cuda={mem:.0f}MiB"
+                f"params={sp_str} cuda={mem:.0f}MiB"
             )
         else:
             print(
                 f"[Epoch {epoch + 1}/{train_config.epochs}] "
                 f"loss={avg_total:.4e} mse={avg_recon:.4e} "
-                f"val_mse={val['mse']:.4e} val_dice={val['dice']:.4f} (CPU)"
+                f"val_mse={val['mse']:.4e} val_dice={val['dice']:.4f} "
+                f"params={sp_str} (CPU)"
             )
 
     return history
