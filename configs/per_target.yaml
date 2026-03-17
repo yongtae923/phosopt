@@ -1,0 +1,31 @@
+# Per-target benchmark (exp.md Section 3.1)
+benchmark: per_target
+methods:
+  - bayesian
+  - all_on
+  - random_subset
+  - heuristic_center
+  - heuristic_intensity
+  - phosopt_per_target
+
+budget:
+  max_simulator_calls: 300
+  max_wall_clock_min: 20
+
+early_stopping:
+  patience_calls: 30
+  min_improvement: 1.0e-4
+
+seeds: [42, 123, 456, 789, 1024]
+
+targets:
+  categories: [single_blob, multi_blob, arc, mnist_letter]
+  indices: all
+
+simulator:
+  backend: diff
+  retinotopy_dir: data/fmri/100610
+  hemisphere: LH
+  map_size: 256
+
+output_dir: results/per_target

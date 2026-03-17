@@ -1,0 +1,31 @@
+# Generalized benchmark (exp.md Section 3.2)
+benchmark: generalized
+methods:
+  - all_on_shared
+  - random_shared
+  - heuristic_shared
+  - phosopt
+
+training:
+  max_epochs: 100
+  patience: 10
+  batch_size: 8
+  lr: 1.0e-3
+  shared_params_lr: 1.0e-2
+
+seeds: [42, 123, 456, 789, 1024]
+
+targets:
+  categories: [single_blob, multi_blob, arc, mnist_letter]
+  indices: all
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+
+simulator:
+  backend: diff
+  retinotopy_dir: data/fmri/100610
+  hemisphere: LH
+  map_size: 256
+
+output_dir: results/generalized

@@ -1,0 +1,27 @@
+# Pilot experiment -- quick end-to-end sanity check
+benchmark: per_target
+methods:
+  - bayesian
+  - phosopt_per_target
+
+budget:
+  max_simulator_calls: 50
+  max_wall_clock_min: 5
+
+early_stopping:
+  patience_calls: 15
+  min_improvement: 1.0e-4
+
+seeds: [42]
+
+targets:
+  categories: [single_blob]
+  indices: [0]            # only first target
+
+simulator:
+  backend: numpy          # faster startup for pilot
+  retinotopy_dir: data/fmri/100610
+  hemisphere: LH
+  map_size: 256
+
+output_dir: results/pilot

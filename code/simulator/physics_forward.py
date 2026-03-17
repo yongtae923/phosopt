@@ -166,6 +166,13 @@ def load_retinotopy(data_dir: Path) -> dict[str, np.ndarray]:
     median_lh = [np.median(cs_coords_lh[0]), np.median(cs_coords_lh[1]), np.median(cs_coords_lh[2])]
     median_rh = [np.median(cs_coords_rh[0]), np.median(cs_coords_rh[1]), np.median(cs_coords_rh[2])]
 
+    # Hemisphere-filtered good coords (for vimplant get_yield)
+    gm_lh_set = set(map(tuple, np.round(gm_lh).astype(np.int32)))
+    gm_rh_set = set(map(tuple, np.round(gm_rh).astype(np.int32)))
+    good_t = np.round(good_coords).T.astype(np.int32)
+    good_coords_lh = good_coords[:, [i for i in range(good_t.shape[0]) if tuple(good_t[i]) in gm_lh_set]]
+    good_coords_rh = good_coords[:, [i for i in range(good_t.shape[0]) if tuple(good_t[i]) in gm_rh_set]]
+
     return {
         "polar_map": polar_map,
         "ecc_map": ecc_map,
@@ -177,6 +184,8 @@ def load_retinotopy(data_dir: Path) -> dict[str, np.ndarray]:
         "v1_coords_lh": v1_coords_lh,
         "v1_coords_rh": v1_coords_rh,
         "good_coords": good_coords,
+        "good_coords_lh": good_coords_lh,
+        "good_coords_rh": good_coords_rh,
     }
 
 
@@ -242,3 +251,100 @@ def make_phosphene_map(
         view_angle=VIEW_ANGLE,
     )
     return normalize_phosphene_map(phosphene_map)
+
+
+def make_phosphene_map_with_contacts(
+    data_dir: Path,
+    alpha: float,
+    beta: float,
+    offset_from_base: float,
+    shank_length: float,
+    hemisphere: str = "LH",
+    as_density: bool = True,
+) -> tuple[np.ndarray, np.ndarray, bool, np.ndarray]:
+    """
+    Same pipeline as make_phosphene_map but returns contacts_xyz_moved,
+    grid_valid, and good_coords for vimplant cost (yield, penalty).
+
+    Returns
+    -------
+    phosphene_map : (WINDOWSIZE, WINDOWSIZE) float32, density if as_density=True.
+    contacts_xyz_moved : (3, N)
+    grid_valid : bool
+    good_coords : (3, M)
+    """
+    data = load_retinotopy(Path(data_dir))
+    if hemisphere.upper() == "LH":
+        gm_mask = data["gm_lh"]
+        start_location = data["median_lh"]
+        v1_h = data["v1_coords_lh"]
+        good_coords = data["good_coords_lh"]
+    else:
+        gm_mask = data["gm_rh"]
+        start_location = data["median_rh"]
+        v1_h = data["v1_coords_rh"]
+        good_coords = data["good_coords_rh"]
+
+    polar_map = data["polar_map"]
+    ecc_map = data["ecc_map"]
+    sigma_map = data["sigma_map"]
+
+    new_angle = (float(alpha), float(beta), 0.0)
+    orig_grid = create_grid(
+        start_location,
+        shank_length=float(shank_length),
+        n_contactpoints_shank=N_CONTACTPOINTS_SHANK,
+        spacing_along_xy=SPACING_ALONG_XY,
+        offset_from_origin=0,
+    )
+    (
+        _,
+        contacts_xyz_moved,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        grid_valid,
+    ) = implant_grid(
+        gm_mask, orig_grid, start_location, new_angle, float(offset_from_base)
+    )
+
+    contact_weights = validate_electrode_activation(
+        electrode_activation=None,
+        expected_count=contacts_xyz_moved.shape[1],
+    )
+    phos_v1, phos_weights = build_weighted_phosphenes(
+        contacts_xyz=contacts_xyz_moved,
+        good_coords=v1_h,
+        polar_map=polar_map,
+        ecc_map=ecc_map,
+        sigma_map=sigma_map,
+        contact_weights=contact_weights,
+    )
+    if phos_v1.size == 0:
+        out_map = np.zeros((WINDOWSIZE, WINDOWSIZE), dtype=np.float32)
+        if as_density:
+            out_map = out_map.astype(np.float64) / (out_map.size + 1e-12)
+        return out_map.astype(np.float32), contacts_xyz_moved, grid_valid, good_coords
+
+    m_inv = 1 / get_cortical_magnification(phos_v1[:, 1], CORT_MAG_MODEL)
+    spread = cortical_spread(AMP)
+    phos_v1[:, 2] = (spread * m_inv) / 2
+
+    phosphene_map = np.zeros((WINDOWSIZE, WINDOWSIZE), dtype=np.float32)
+    phosphene_map = prf_to_phos_weighted(
+        phosphene_map=phosphene_map,
+        phosphenes=phos_v1,
+        weights=phos_weights,
+        view_angle=VIEW_ANGLE,
+    )
+    phosphene_map = normalize_phosphene_map(phosphene_map)
+    if as_density:
+        phosphene_map = phosphene_map.astype(np.float64)
+        s = phosphene_map.sum()
+        if s > 0:
+            phosphene_map /= s
+        phosphene_map = phosphene_map.astype(np.float32)
+    return phosphene_map, contacts_xyz_moved, grid_valid, good_coords

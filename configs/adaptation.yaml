@@ -1,0 +1,31 @@
+# Adaptation benchmark (exp.md Section 3.3)
+benchmark: adaptation
+methods:
+  - bayesian_scratch
+  - phosopt_finetune
+  - phosopt_zeroshot
+
+budget:
+  max_simulator_calls: 100
+  max_wall_clock_min: 10
+
+early_stopping:
+  patience_calls: 20
+  min_improvement: 1.0e-4
+
+seeds: [42, 123, 456, 789, 1024]
+
+pretrained_model: results/generalized/best_model.pt
+
+targets:
+  categories: [single_blob, multi_blob, arc, mnist_letter]
+  # Use test split targets unseen during generalized training
+  split: test
+
+simulator:
+  backend: diff
+  retinotopy_dir: data/fmri/100610
+  hemisphere: LH
+  map_size: 256
+
+output_dir: results/adaptation

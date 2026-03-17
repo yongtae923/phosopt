@@ -39,3 +39,6 @@ data/
 
 # Keep placeholder if needed
 !data/.gitkeep
+
+# Experiment results (generated)
+results/

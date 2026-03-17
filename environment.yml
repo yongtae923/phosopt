@@ -13,6 +13,11 @@ dependencies:
   - trimesh
   - rtree
   - tqdm
+  - pyyaml
+  - scikit-optimize
+  - scikit-learn
+  - scikit-image
+  - pandas
   - pytorch
   - torchvision
   - torchaudio
