@@ -106,7 +106,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--shared-params-lr", type=float, default=1e-2, help="Learning rate for shared implant params")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--save-dir", type=Path, default=PROJECT_ROOT / "data" / "output" / "inverse_training")
+    parser.add_argument("--save-dir", type=Path, default=PROJECT_ROOT / "data" / "output" / "inverse_training_filtered")
     parser.add_argument("--valid-electrode-mask", type=Path, default=None, help="Optional 1000-dim mask .npy")
     parser.add_argument(
         "--simulator",
