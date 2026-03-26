@@ -1,3 +1,22 @@
+# D:\yongtae\phosopt\code\loss\losses.py
+
+"""
+Loss functions for PhosOpt inverse model training.
+This module defines:
+- `LossConfig`: Configuration for weighting different loss components.
+- `build_losses`: Function to compute and combine all loss components given 
+    model outputs and targets.
+
+The loss components include:
+- Reconstruction loss (MSE)
+- Soft Dice loss for shape similarity
+- Sparsity loss on electrode activations
+- Parameter prior loss to encourage similar parameters across batch
+- Invalid region penalty to discourage activations in non-viable electrode 
+    locations
+- Linear warmup for regularization terms to stabilize early training.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

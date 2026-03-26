@@ -1,3 +1,19 @@
+# D:\yongtae\phosopt\code\models\encoder.py
+
+"""
+Encoder module for PhosOpt inverse model.
+
+This module defines an E2E-style convolutional encoder adapted for 256x256 
+    phosphene maps.
+
+The architecture consists of:
+- A series of Conv-BN-LeakyReLU blocks with downsampling via MaxPool2
+- Residual blocks for feature refinement
+- A final convolution to reduce channels to 1
+- A fully connected head to produce a latent vector for downstream parameter 
+    prediction
+"""
+
 from __future__ import annotations
 
 from typing import List

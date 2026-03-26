@@ -1,3 +1,18 @@
+# D:\yongtae\phosopt\code\simulator\simulator_wrapper.py
+
+"""
+Simulator wrapper for PhosOpt inverse model.
+This module defines two classes:
+1) `SimulatorWrapper`: A wrapper around an already differentiable simulator 
+    callable.
+2) `NumpySimulatorAdapter`: An adapter for the current numpy-based forward 
+    simulator, which is non-differentiable and should not be used for gradient 
+    training.
+
+SimulatorWrapper expects a simulator function with the signature:
+    (params: Tensor[B,4], electrode_prob: Tensor[B,1000]) -> Tensor[B,1,H,W]
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

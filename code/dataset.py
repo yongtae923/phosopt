@@ -1,3 +1,16 @@
+# D:\yongtae\phosopt\code\dataset.py
+
+"""
+Dataset utilities for self-supervised inverse learning on phosphene maps.
+
+This module defines:
+- `SplitConfig`: Configuration for dataset splitting.
+- `normalize_target_map`: Function to normalize target maps to [0, 1].
+- `PhospheneDataset`: PyTorch Dataset for phosphene maps.
+- `make_splits`: Function to create train/val/test splits from a dataset.
+- `load_letters_phosphene_splits`: Function to load pre-defined EMNIST phosphene splits from an NPZ file.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

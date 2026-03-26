@@ -1,3 +1,22 @@
+# D:\yongtae\phosopt\code\trainer.py
+
+"""
+Training script for PhosOpt inverse model.
+
+Given:
+- a differentiable simulator,
+- a training dataset of target phosphene maps,
+- and a model architecture for the inverse mapping,
+    this script trains the inverse model to predict implant parameters and 
+    electrode activations that reconstruct the target maps via the simulator.
+
+The training loop includes:
+1) Forward pass through the model and simulator,
+2) Loss computation with multiple components,
+3) Backpropagation and optimization,
+4) Validation and checkpointing.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

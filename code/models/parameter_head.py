@@ -1,3 +1,20 @@
+# D:\yongtae\phosopt\code\models\parameter_head.py
+
+"""
+Parameter head module for PhosOpt inverse model.
+
+This module defines:
+- `ParameterBounds`: A dataclass to specify min/max bounds for implant 
+    parameters.
+- `ContinuousHead`: A head to predict 4 bounded continuous implant parameters.
+- `ElectrodeHead`: A head to predict 1000 electrode logits (soft weights).
+- `ParameterHead`: A combined head that wraps both ContinuousHead and 
+    ElectrodeHead for backward compatibility.
+
+The continuous parameters are bounded using a sigmoid transformation to ensure 
+    they stay within the specified physical limits.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

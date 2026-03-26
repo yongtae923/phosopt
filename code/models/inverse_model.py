@@ -1,3 +1,20 @@
+# D:\yongtae\phosopt\code\models\inverse_model.py
+
+"""
+Inverse model for PhosOpt self-supervised learning.
+
+This module defines the `InverseModel` class, which consists of:
+- A shared implant parameter vector (alpha, beta, offset, shank_length) that is
+    learned globally across all images.
+- An Encoder that processes input phosphene maps into a latent representation.
+- An ElectrodeHead that predicts per-image electrode activations from the latent
+    representation.
+
+The forward pass returns both the shared implant parameters and the per-image
+    electrode logits, which are then used by the simulator to reconstruct the
+    phosphene map for loss computation.
+"""
+
 from __future__ import annotations
 
 import torch

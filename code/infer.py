@@ -1,4 +1,4 @@
-from __future__ import annotations
+# D:\yongtae\phosopt\code\infer.py
 
 """
 Inference script for PhosOpt inverse model.
@@ -16,6 +16,8 @@ this script:
 3) Reconstructs the phosphene map via the simulator.
 4) Saves all results to disk.
 """
+
+from __future__ import annotations
 
 import argparse
 import json

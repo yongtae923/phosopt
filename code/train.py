@@ -1,3 +1,20 @@
+# D:\yongtae\phosopt\code\train.py
+
+"""
+Training script for PhosOpt inverse model.
+
+Given:
+- a dataset of target phosphene maps (directory of .npy or .npz with
+    train/test splits),
+- the retinotopy directory for the simulator,
+
+this script:
+1) Loads the dataset and creates train/val/test splits.
+2) Builds the InverseModel and DifferentiableSimulator.
+3) Trains the model to estimate implant parameters and electrode activations.
+4) Evaluates the trained model on the test set and saves results to disk.
+"""
+
 from __future__ import annotations
 
 import os
