@@ -45,7 +45,7 @@ print("[PhosOpt] Loading project modules...", flush=True)
 from dataset import PhospheneDataset, SplitConfig, load_letters_phosphene_splits, make_splits
 from loss.losses import LossConfig
 from models.inverse_model import InverseModel
-from simulator.physics_forward_torch import DifferentiableSimulator
+from simulator.physics_forward_torch_v2 import DifferentiableSimulatorIndependent
 from simulator.simulator_wrapper import NumpySimulatorAdapter
 print("[PhosOpt] Imports done.", flush=True)
 from trainer import (
@@ -122,8 +122,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--shared-params-lr", type=float, default=1e-2, help="Learning rate for shared implant params")
+    parser.add_argument("--min-epochs", type=int, default=20, help="Minimum epochs before early stopping allowed")
+    parser.add_argument("--early-stop-patience", type=int, default=5, help="Epochs without improvement before early stopping")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--save-dir", type=Path, default=PROJECT_ROOT / "data" / "output" / "inverse_training_filtered")
+    parser.add_argument("--save-dir", type=Path, default=PROJECT_ROOT / "data" / "output" / "inverse_training_v2")
     parser.add_argument("--valid-electrode-mask", type=Path, default=None, help="Optional 1000-dim mask .npy")
     parser.add_argument(
         "--simulator",
@@ -265,8 +267,8 @@ def main() -> None:
 
     if args.simulator == "diff":
         print(f"Loading retinotopy data from {args.retinotopy_dir}...", flush=True)
-        print(f"Using differentiable simulator (map_size={args.map_size})", flush=True)
-        simulator = DifferentiableSimulator(
+        print(f"Using differentiable simulator v2 (map_size={args.map_size})", flush=True)
+        simulator = DifferentiableSimulatorIndependent(
             data_dir=args.retinotopy_dir,
             hemisphere=args.hemisphere,
             map_size=args.map_size,
@@ -275,10 +277,7 @@ def main() -> None:
         print("Using numpy simulator (non-differentiable, debug only)", flush=True)
         simulator = NumpySimulatorAdapter(data_dir=args.retinotopy_dir, hemisphere=args.hemisphere)
     loss_config = LossConfig(
-        recon_weight=1.0,
-        dice_weight=0.5,
         sparsity_weight=1e-3,
-        param_prior_weight=1e-4,
         invalid_region_weight=1e-3,
         warmup_epochs=10,
     )
@@ -292,6 +291,8 @@ def main() -> None:
         allow_nondiff_training=args.allow_nondiff_training,
         refinement_steps=0,
         refinement_lr=1e-2,
+        min_epochs_for_early_stop=args.min_epochs,
+        patience_for_early_stop=args.early_stop_patience,
     )
 
     valid_mask = _load_valid_electrode_mask(args.valid_electrode_mask, device=device)
@@ -334,7 +335,8 @@ def main() -> None:
     )
 
     test_metrics = evaluate_inverse_model(
-        model=model.to(device), simulator=simulator.to(device), data_loader=test_loader, device=device
+        model=model.to(device), simulator=simulator.to(device), data_loader=test_loader, 
+        loss_config=loss_config, device=device
     )
     random_baseline = evaluate_random_baseline(simulator=simulator.to(device), data_loader=test_loader)
     four_param_baseline = evaluate_four_param_baseline(

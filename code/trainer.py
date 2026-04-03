@@ -46,6 +46,8 @@ class TrainConfig:
     refinement_lr: float = 1e-2
     scheduler_patience: int = 10
     scheduler_factor: float = 0.5
+    min_epochs_for_early_stop: int = 20
+    patience_for_early_stop: int = 5
 
 
 def _device() -> torch.device:
@@ -84,7 +86,7 @@ def _save_checkpoint(
     optimizer: AdamW,
     scheduler: ReduceLROnPlateau,
     history: dict[str, list[float]],
-    best_val_mse: float,
+    best_val_total_loss: float,
 ) -> None:
     torch.save(
         {
@@ -93,7 +95,7 @@ def _save_checkpoint(
             "optimizer_state_dict": optimizer.state_dict(),
             "scheduler_state_dict": scheduler.state_dict(),
             "history": history,
-            "best_val_mse": best_val_mse,
+            "best_val_total_loss": best_val_total_loss,
         },
         path,
     )
@@ -150,10 +152,11 @@ def train_inverse_model(
 
     # Defaults
     start_epoch = 0
-    best_val_mse = float("inf")
+    best_val_total_loss = float("inf")
     history: dict[str, list[float]] = {
         "train_total": [],
-        "train_recon": [],
+        "train_main": [],
+        "val_total_loss": [],
         "val_mse": [],
         "val_dice": [],
         "val_hellinger": [],
@@ -163,11 +166,16 @@ def train_inverse_model(
     if resume_checkpoint is not None:
         start_epoch = resume_checkpoint["epoch"] + 1
         history = resume_checkpoint["history"]
-        best_val_mse = resume_checkpoint.get("best_val_mse", float("inf"))
+        best_val_total_loss = resume_checkpoint.get(
+            "best_val_total_loss",
+            resume_checkpoint.get("best_val_mse", float("inf")),
+        )
+        if "train_main" not in history and "train_recon" in history:
+            history["train_main"] = history["train_recon"]
         opt.load_state_dict(resume_checkpoint["optimizer_state_dict"])
         scheduler.load_state_dict(resume_checkpoint["scheduler_state_dict"])
         print(f"[Resume] Continuing from epoch {start_epoch + 1}/{train_config.epochs} "
-              f"(best_val_mse={best_val_mse:.4e})")
+              f"(best_val_total_loss={best_val_total_loss:.4e})")
 
     if checkpoint_dir is not None:
         checkpoint_dir = Path(checkpoint_dir)
@@ -175,11 +183,16 @@ def train_inverse_model(
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters: {n_params:,}")
+    print(f"[EarlyStopping] Min epochs: {train_config.min_epochs_for_early_stop}, "
+          f"Patience: {train_config.patience_for_early_stop}")
+
+    # Early stopping tracking
+    epochs_without_improvement = 0
 
     for epoch in range(start_epoch, train_config.epochs):
         model.train()
         total_acc = 0.0
-        recon_acc = 0.0
+        main_acc = 0.0
         steps = 0
 
         train_iter = tqdm(
@@ -207,6 +220,7 @@ def train_inverse_model(
                 target=target,
                 params=params,
                 electrode_logits=electrode_logits,
+                simulator=simulator,
                 valid_electrode_mask=valid_electrode_mask,
                 epoch_idx=epoch,
                 config=loss_config,
@@ -232,10 +246,11 @@ def train_inverse_model(
                     f"  [diag] params=[{sp_str}] "
                     f"target:[{target.min():.3f},{target.max():.3f}] "
                     f"recon:[{recon.min():.3f},{recon.max():.3f}] "
-                    f"elec:[{elec_prob.min():.3f},{elec_prob.max():.3f}] "
                     f"grad={grad_norm:.2e} lr={lr_now:.1e} "
-                    f"mse={losses['recon'].item():.4e} "
-                    f"dice_l={losses['dice_loss'].item():.4f}"
+                    f"loss_main={losses['loss_main'].item():.4e} "
+                    f"dc_soft={losses['dc_soft'].item():.4f} "
+                    f"y={losses['y_metric'].item():.4f} "
+                    f"hd={losses['hd_metric'].item():.4f}"
                 )
 
             if train_config.grad_clip_norm > 0:
@@ -243,31 +258,35 @@ def train_inverse_model(
             opt.step()
 
             total_acc += float(losses["total"].item())
-            recon_acc += float(losses["recon"].item())
+            main_acc += float(losses["loss_main"].item())
             steps += 1
             train_iter.set_postfix(
                 total=f"{losses['total'].item():.4e}",
-                recon=f"{losses['recon'].item():.4e}",
+                main=f"{losses['loss_main'].item():.4e}",
             )
 
         avg_total = total_acc / max(steps, 1)
-        avg_recon = recon_acc / max(steps, 1)
+        avg_main = main_acc / max(steps, 1)
         history["train_total"].append(avg_total)
-        history["train_recon"].append(avg_recon)
+        history["train_main"].append(avg_main)
 
         val = evaluate_inverse_model(
-            model=model, simulator=simulator, data_loader=val_loader, device=dev,
+            model=model, simulator=simulator, data_loader=val_loader, loss_config=loss_config, device=dev,
         )
+        history["val_total_loss"].append(val["total_loss"])
         history["val_mse"].append(val["mse"])
         history["val_dice"].append(val["dice"])
         history["val_hellinger"].append(val["hellinger"])
 
-        scheduler.step(val["mse"])
+        scheduler.step(val["total_loss"])
 
-        # Track best
-        is_best = val["mse"] < best_val_mse
+        # Track best and early stopping (based on val_total_loss)
+        is_best = val["total_loss"] < best_val_total_loss
         if is_best:
-            best_val_mse = val["mse"]
+            best_val_total_loss = val["total_loss"]
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
 
         sp = model.shared_params.detach().cpu() if hasattr(model, "shared_params") else None
         sp_str = (
@@ -279,16 +298,16 @@ def train_inverse_model(
             mem = torch.cuda.memory_allocated(dev) / (1024**2)
             print(
                 f"[Epoch {epoch + 1}/{train_config.epochs}] "
-                f"loss={avg_total:.4e} mse={avg_recon:.4e} "
-                f"val_mse={val['mse']:.4e} val_dice={val['dice']:.4f} "
+                f"loss={avg_total:.4e} main={avg_main:.4e} "
+                f"val_total_loss={val['total_loss']:.4e} val_mse={val['mse']:.4e} val_dice={val['dice']:.4f} "
                 f"params={sp_str} cuda={mem:.0f}MiB"
                 f"{' *best*' if is_best else ''}"
             )
         else:
             print(
                 f"[Epoch {epoch + 1}/{train_config.epochs}] "
-                f"loss={avg_total:.4e} mse={avg_recon:.4e} "
-                f"val_mse={val['mse']:.4e} val_dice={val['dice']:.4f} "
+                f"loss={avg_total:.4e} main={avg_main:.4e} "
+                f"val_total_loss={val['total_loss']:.4e} val_mse={val['mse']:.4e} val_dice={val['dice']:.4f} "
                 f"params={sp_str} (CPU)"
                 f"{' *best*' if is_best else ''}"
             )
@@ -296,11 +315,18 @@ def train_inverse_model(
         # Save checkpoint every epoch
         if checkpoint_dir is not None:
             ckpt_path = checkpoint_dir / "checkpoint_latest.pt"
-            _save_checkpoint(ckpt_path, epoch, model, opt, scheduler, history, best_val_mse)
+            _save_checkpoint(ckpt_path, epoch, model, opt, scheduler, history, best_val_total_loss)
             if is_best:
                 best_path = checkpoint_dir / "checkpoint_best.pt"
-                _save_checkpoint(best_path, epoch, model, opt, scheduler, history, best_val_mse)
-                print(f"  [ckpt] Saved best checkpoint (val_mse={best_val_mse:.4e})")
+                _save_checkpoint(best_path, epoch, model, opt, scheduler, history, best_val_total_loss)
+                print(f"  [ckpt] Saved best checkpoint (val_total_loss={best_val_total_loss:.4e})")
+
+        # Early stopping check
+        if epoch + 1 >= train_config.min_epochs_for_early_stop and \
+           epochs_without_improvement >= train_config.patience_for_early_stop:
+            print(f"[EarlyStopping] Stopped at epoch {epoch + 1} "
+                  f"(no improvement for {epochs_without_improvement} epochs)")
+            break
 
     return history
 
@@ -310,11 +336,13 @@ def evaluate_inverse_model(
     model: nn.Module,
     simulator: nn.Module,
     data_loader: DataLoader,
+    loss_config: LossConfig,
     device: torch.device | None = None,
 ) -> dict[str, float]:
     dev = device or _device()
     model.eval()
 
+    total_loss_sum = 0.0
     mse_sum = 0.0
     dice_sum = 0.0
     h_sum = 0.0
@@ -323,13 +351,32 @@ def evaluate_inverse_model(
         target = batch.to(dev)
         params, electrode_logits = model(target)
         recon = simulator(params, electrode_logits)
+        
+        # Compute loss (use epoch_idx=500 to ensure warmup scale is 1.0 for validation)
+        losses = build_losses(
+            recon=recon,
+            target=target,
+            params=params,
+            electrode_logits=electrode_logits,
+            simulator=simulator,
+            valid_electrode_mask=None,
+            epoch_idx=500,  # Large epoch to disable warmup, full auxiliary terms
+            config=loss_config,
+        )
+        
+        total_loss_sum += float(losses["total"].item())
         mse_sum += float(torch.mean((recon - target) ** 2).item())
         dice_sum += float(dice_score(recon, target).item())
         h_sum += float(hellinger_distance(recon, target).item())
         n += 1
 
     denom = max(n, 1)
-    return {"mse": mse_sum / denom, "dice": dice_sum / denom, "hellinger": h_sum / denom}
+    return {
+        "total_loss": total_loss_sum / denom,
+        "mse": mse_sum / denom,
+        "dice": dice_sum / denom,
+        "hellinger": h_sum / denom,
+    }
 
 
 @torch.no_grad()

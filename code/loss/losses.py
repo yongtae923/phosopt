@@ -3,18 +3,17 @@
 """
 Loss functions for PhosOpt inverse model training.
 This module defines:
-- `LossConfig`: Configuration for weighting different loss components.
-- `build_losses`: Function to compute and combine all loss components given 
-    model outputs and targets.
+- `LossConfig`: Configuration for weighting auxiliary loss components.
+- `build_losses`: Function to compute total loss as:
+    L_main = 2 - dc_soft - 0.1*y + hd
+    L_total = L_main + λs*sparsity + λi*invalid_region
 
-The loss components include:
-- Reconstruction loss (MSE)
-- Soft Dice loss for shape similarity
-- Sparsity loss on electrode activations
-- Parameter prior loss to encourage similar parameters across batch
-- Invalid region penalty to discourage activations in non-viable electrode 
-    locations
-- Linear warmup for regularization terms to stabilize early training.
+Where:
+- dc_soft = 1 - soft_dice_loss(recon, target) [soft Dice score]
+- y = contact yield from simulator
+- hd = Hellinger distance between recon and target
+- sparsity = mean electrode activation probability
+- invalid_region = penalty for activations in invalid electrode locations
 """
 
 from __future__ import annotations
@@ -27,10 +26,7 @@ import torch.nn.functional as F
 
 @dataclass(frozen=True)
 class LossConfig:
-    recon_weight: float = 1.0
-    dice_weight: float = 0.5
     sparsity_weight: float = 1e-3
-    param_prior_weight: float = 1e-4
     invalid_region_weight: float = 1e-3
     warmup_epochs: int = 10
 
@@ -69,9 +65,24 @@ def hellinger_distance(
 ) -> torch.Tensor:
     p = pred.clamp_min(eps)
     q = target.clamp_min(eps)
+
+    # Normalize each sample to probability distributions (sum to 1).
+    p_sum = p.flatten(start_dim=1).sum(dim=1).view(-1, 1, 1, 1)
+    q_sum = q.flatten(start_dim=1).sum(dim=1).view(-1, 1, 1, 1)
+    p = p / (p_sum + eps)
+    q = q / (q_sum + eps)
+
     return torch.sqrt(
         torch.sum((torch.sqrt(p) - torch.sqrt(q)) ** 2, dim=(1, 2, 3)) / 2.0
     ).mean()
+
+
+def y_metric_from_params(simulator: torch.nn.Module, params: torch.Tensor) -> torch.Tensor:
+    """Estimate contact yield as mean soft-validity over contacts."""
+    alpha, beta, offset, shank = params[:, 0], params[:, 1], params[:, 2], params[:, 3]
+    positioned = simulator._create_positioned_grid(alpha, beta, offset, shank)
+    _, validity = simulator._soft_prf_lookup(positioned)
+    return validity.mean()
 
 
 def kl_divergence(
@@ -87,18 +98,35 @@ def build_losses(
     target: torch.Tensor,
     params: torch.Tensor,
     electrode_logits: torch.Tensor,
+    simulator: torch.nn.Module,
     valid_electrode_mask: torch.Tensor | None,
     epoch_idx: int,
     config: LossConfig,
 ) -> dict[str, torch.Tensor]:
-    recon_loss = F.mse_loss(recon, target)
-    dice_loss = soft_dice_loss(recon, target)
+    """Compute vimplant-objective-based loss with auxiliary regularization terms.
+    
+    Args:
+        recon: Reconstructed phosphene map [B,1,H,W]
+        target: Target phosphene map [B,1,H,W]
+        params: Implant parameters [B,4]
+        electrode_logits: Electrode logits [B,1000]
+        simulator: DifferentiableSimulator for y metric
+        valid_electrode_mask: Electrode validity mask or None
+        epoch_idx: Current epoch for warmup scheduling
+        config: Loss configuration
+    
+    Returns:
+        Dictionary with loss components and total loss.
+    """
+    # Main objective: 2 - dc_soft - 0.1*y + hd
+    dc_soft = 1.0 - soft_dice_loss(recon, target)
+    y = y_metric_from_params(simulator, params)
+    hd = hellinger_distance(recon, target)
+    loss_main = 2.0 - dc_soft - 0.1 * y + hd
 
+    # Auxiliary regularization terms
     electrode_prob = torch.sigmoid(electrode_logits)
     sparsity_loss = electrode_prob.mean()
-
-    param_center = params.mean(dim=0, keepdim=True)
-    param_prior_loss = ((params - param_center) ** 2).mean()
 
     if valid_electrode_mask is None:
         invalid_region_loss = torch.zeros((), device=recon.device)
@@ -106,19 +134,20 @@ def build_losses(
         invalid_mask = (1.0 - valid_electrode_mask).to(recon.device)
         invalid_region_loss = (electrode_prob * invalid_mask).mean()
 
+    # Apply warmup to auxiliary terms
     warm = linear_warmup_scale(epoch_idx=epoch_idx, warmup_epochs=config.warmup_epochs)
     total = (
-        config.recon_weight * recon_loss
-        + config.dice_weight * dice_loss
+        loss_main
         + warm * config.sparsity_weight * sparsity_loss
-        + warm * config.param_prior_weight * param_prior_loss
         + warm * config.invalid_region_weight * invalid_region_loss
     )
+    
     return {
         "total": total,
-        "recon": recon_loss,
-        "dice_loss": dice_loss,
+        "loss_main": loss_main,
+        "dc_soft": dc_soft,
+        "y_metric": y,
+        "hd_metric": hd,
         "sparsity": sparsity_loss,
-        "param_prior": param_prior_loss,
         "invalid_region": invalid_region_loss,
     }
