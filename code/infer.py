@@ -44,16 +44,16 @@ from simulator.physics_forward_torch import DifferentiableSimulator  # noqa: E40
 # -----------------------------------------------------------------------------
 # Inference configuration (edit here instead of CLI args)
 # -----------------------------------------------------------------------------
-MODEL_PATH = PROJECT_ROOT / "data" / "output" / "inverse_training_v2" / "single_subject_inverse_model.pt"
+MODEL_PATH = PROJECT_ROOT / "data" / "output" / "inverse_training_v3_halfright" / "single_subject_inverse_model.pt"
 RETINOTOPY_DIR = PROJECT_ROOT / "data" / "fmri" / "100610"
 HEMISPHERE = "LH"
 MAP_SIZE = 256
 
-EMNIST_NPZ = PROJECT_ROOT / "data" / "letters" / "emnist_letters_phosphenes_filtered.npz"
+EMNIST_NPZ = PROJECT_ROOT / "data" / "letters" / "emnist_letters_v3_halfright.npz"
 EMNIST_SPLIT = "test"
 
 SAVE_ROOT = PROJECT_ROOT / "data" / "output"
-RUN_NAME = "infer_v2_all_test"
+RUN_NAME = "infer_v3_halfright"
 ELECTRODE_ON_THRESHOLD = 0.5
 
 
