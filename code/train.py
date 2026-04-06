@@ -27,7 +27,6 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 print("[PhosOpt] Loading dependencies...", flush=True)
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -78,13 +77,19 @@ SHARED_PARAMS_LR = 1e-2
 MIN_EPOCHS = 20
 EARLY_STOP_PATIENCE = 5
 SEED = 42
-SAVE_DIR = PROJECT_ROOT / "data" / "output" / "inverse_training_v3_halfright"
+SAVE_DIR = PROJECT_ROOT / "data" / "output"
 VALID_ELECTRODE_MASK = None
 SIMULATOR = "diff"
 MAP_SIZE = 256
 ALLOW_NONDIFF_TRAINING = False
 RESUME = None
 NO_RESUME = False
+LOSS_VARIANTS = [
+    {"name": "v3_1_baseline", "sparsity_weight": 1e-3, "invalid_region_weight": 1e-3},
+    {"name": "v3_2_no_sparsity", "sparsity_weight": 0.0, "invalid_region_weight": 1e-3},
+    {"name": "v3_3_no_invalid_region", "sparsity_weight": 1e-3, "invalid_region_weight": 0.0},
+    {"name": "v3_4_no_aux", "sparsity_weight": 0.0, "invalid_region_weight": 0.0},
+]
 
 
 def _get_device() -> torch.device:
@@ -212,9 +217,6 @@ def main() -> None:
     )
     _print_runtime_info(device=device, num_workers=num_workers)
 
-    print("Building model...", flush=True)
-    model = InverseModel(in_channels=1, latent_dim=256, electrode_dim=1000)
-
     if SIMULATOR == "diff":
         print(f"Loading retinotopy data from {RETINOTOPY_DIR}...", flush=True)
         print(f"Using differentiable simulator v2 (map_size={MAP_SIZE})", flush=True)
@@ -226,11 +228,7 @@ def main() -> None:
     else:
         print("Using numpy simulator (non-differentiable, debug only)", flush=True)
         simulator = NumpySimulatorAdapter(data_dir=RETINOTOPY_DIR, hemisphere=HEMISPHERE)
-    loss_config = LossConfig(
-        sparsity_weight=1e-3,
-        invalid_region_weight=1e-3,
-        warmup_epochs=10,
-    )
+
     train_config = TrainConfig(
         epochs=EPOCHS,
         batch_size=BATCH_SIZE,
@@ -246,84 +244,118 @@ def main() -> None:
     )
 
     valid_mask = _load_valid_electrode_mask(VALID_ELECTRODE_MASK, device=device)
-
-    # Checkpoint directory (always active)
-    checkpoint_dir = SAVE_DIR / f"{SUBJECT_ID}_checkpoints"
-
-    # Auto-resume: find existing checkpoint unless --no-resume
-    resume_ckpt = None
-    if not NO_RESUME:
-        ckpt_path = RESUME
-        if ckpt_path is None:
-            auto_path = checkpoint_dir / "checkpoint_latest.pt"
-            if auto_path.exists():
-                ckpt_path = auto_path
-                print(f"[Auto-resume] Found checkpoint: {ckpt_path}", flush=True)
-        if ckpt_path is not None:
-            if not ckpt_path.exists():
-                raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
-            print(f"Loading checkpoint: {ckpt_path}", flush=True)
-            resume_ckpt = load_checkpoint(ckpt_path, model, device)
-            completed = resume_ckpt["epoch"] + 1
-            print(f"Checkpoint loaded: epoch {completed}/{EPOCHS} completed", flush=True)
-            if completed >= EPOCHS:
-                print(f"Already completed {completed} epochs (target={EPOCHS}). "
-                      f"Use EPOCHS = {completed + 10} to train more, or set NO_RESUME = True for fresh start.")
-                return
-
-    print("Starting training...", flush=True)
-    history = train_inverse_model(
-        model=model,
-        simulator=simulator,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        loss_config=loss_config,
-        train_config=train_config,
-        valid_electrode_mask=valid_mask,
-        checkpoint_dir=checkpoint_dir,
-        resume_checkpoint=resume_ckpt,
-    )
-
-    test_metrics = evaluate_inverse_model(
-        model=model.to(device), simulator=simulator.to(device), data_loader=test_loader,
-        loss_config=loss_config, device=device
-    )
-    random_baseline = evaluate_random_baseline(simulator=simulator.to(device), data_loader=test_loader)
-    four_param_baseline = evaluate_four_param_baseline(
-        model=model.to(device), simulator=simulator.to(device), data_loader=test_loader
-    )
-
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
-    model_path = SAVE_DIR / f"{SUBJECT_ID}_inverse_model.pt"
-    report_path = SAVE_DIR / f"{SUBJECT_ID}_report.json"
-    torch.save(model.state_dict(), model_path)
-    sp = model.shared_params.detach().cpu().tolist()
-    learned_params = {
-        "alpha": sp[0], "beta": sp[1],
-        "offset_from_base": sp[2], "shank_length": sp[3],
-    }
-    report = {
-        "subject_id": SUBJECT_ID,
-        "learned_implant_params": learned_params,
-        "history": history,
-        "test_metrics": test_metrics,
-        "baselines": {
-            "random": random_baseline,
-            "four_params_only": four_param_baseline,
-        },
-        "config": {
-            "loss": loss_config.__dict__,
-            "train": train_config.__dict__,
-        },
-    }
-    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
-    print(f"Saved model: {model_path}")
-    print(f"Saved report: {report_path}")
-    print(f"Learned implant params: {learned_params}")
+    for idx, variant in enumerate(LOSS_VARIANTS, start=1):
+        variant_name = variant["name"]
+        variant_save_dir = SAVE_DIR / variant_name
+        checkpoint_dir = variant_save_dir / f"{SUBJECT_ID}_checkpoints"
+
+        print("\n" + "=" * 80, flush=True)
+        print(f"[Variant {idx}/{len(LOSS_VARIANTS)}] {variant_name}", flush=True)
+        print(
+            f"  sparsity_weight={variant['sparsity_weight']} "
+            f"invalid_region_weight={variant['invalid_region_weight']}",
+            flush=True,
+        )
+        print(f"  output_dir={variant_save_dir}", flush=True)
+        print(f"  checkpoint_dir={checkpoint_dir}", flush=True)
+        print("=" * 80, flush=True)
+
+        print("Building model...", flush=True)
+        model = InverseModel(in_channels=1, latent_dim=256, electrode_dim=1000)
+        loss_config = LossConfig(
+            sparsity_weight=float(variant["sparsity_weight"]),
+            invalid_region_weight=float(variant["invalid_region_weight"]),
+            warmup_epochs=10,
+        )
+
+        # Auto-resume per variant: find existing checkpoint unless --no-resume
+        resume_ckpt = None
+        if not NO_RESUME:
+            ckpt_path = RESUME
+            if ckpt_path is None:
+                auto_path = checkpoint_dir / "checkpoint_latest.pt"
+                if auto_path.exists():
+                    ckpt_path = auto_path
+                    print(f"[Auto-resume][{variant_name}] Found checkpoint: {ckpt_path}", flush=True)
+            if ckpt_path is not None:
+                if not ckpt_path.exists():
+                    raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+                print(f"Loading checkpoint: {ckpt_path}", flush=True)
+                resume_ckpt = load_checkpoint(ckpt_path, model, device)
+                completed = resume_ckpt["epoch"] + 1
+                print(f"Checkpoint loaded: epoch {completed}/{EPOCHS} completed", flush=True)
+                if completed >= EPOCHS:
+                    print(
+                        f"[{variant_name}] Already completed {completed} epochs (target={EPOCHS}). "
+                        "Skipping training and evaluating current checkpoint model.",
+                        flush=True,
+                    )
+
+        print(f"Starting training: {variant_name}", flush=True)
+        history = train_inverse_model(
+            model=model,
+            simulator=simulator,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            loss_config=loss_config,
+            train_config=train_config,
+            valid_electrode_mask=valid_mask,
+            checkpoint_dir=checkpoint_dir,
+            resume_checkpoint=resume_ckpt,
+        )
+
+        test_metrics = evaluate_inverse_model(
+            model=model.to(device),
+            simulator=simulator.to(device),
+            data_loader=test_loader,
+            loss_config=loss_config,
+            device=device,
+        )
+        random_baseline = evaluate_random_baseline(simulator=simulator.to(device), data_loader=test_loader)
+        four_param_baseline = evaluate_four_param_baseline(
+            model=model.to(device), simulator=simulator.to(device), data_loader=test_loader
+        )
+
+        variant_save_dir.mkdir(parents=True, exist_ok=True)
+        model_path = variant_save_dir / f"{SUBJECT_ID}_inverse_model.pt"
+        report_path = variant_save_dir / f"{SUBJECT_ID}_report.json"
+        torch.save(model.state_dict(), model_path)
+        sp = model.shared_params.detach().cpu().tolist()
+        learned_params = {
+            "alpha": sp[0], "beta": sp[1],
+            "offset_from_base": sp[2], "shank_length": sp[3],
+        }
+        report = {
+            "variant": variant_name,
+            "subject_id": SUBJECT_ID,
+            "learned_implant_params": learned_params,
+            "history": history,
+            "test_metrics": test_metrics,
+            "baselines": {
+                "random": random_baseline,
+                "four_params_only": four_param_baseline,
+            },
+            "config": {
+                "loss": loss_config.__dict__,
+                "train": train_config.__dict__,
+            },
+        }
+        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+        print(f"Saved model: {model_path}")
+        print(f"Saved report: {report_path}")
+        print(f"Learned implant params: {learned_params}")
+        print(f"Test metrics: {test_metrics}")
+
+        del model
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+    print(f"All variants completed. Output root: {SAVE_DIR}")
     print(f"Device: {device}")
     print(f"DataLoader workers: {num_workers}")
-    print(f"Test metrics: {test_metrics}")
 
 
 if __name__ == "__main__":

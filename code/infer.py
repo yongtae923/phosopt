@@ -44,17 +44,22 @@ from simulator.physics_forward_torch import DifferentiableSimulator  # noqa: E40
 # -----------------------------------------------------------------------------
 # Inference configuration (edit here instead of CLI args)
 # -----------------------------------------------------------------------------
-MODEL_PATH = PROJECT_ROOT / "data" / "output" / "inverse_training_v3_halfright" / "single_subject_inverse_model.pt"
 RETINOTOPY_DIR = PROJECT_ROOT / "data" / "fmri" / "100610"
 HEMISPHERE = "LH"
 MAP_SIZE = 256
+SUBJECT_ID = "single_subject"
 
 EMNIST_NPZ = PROJECT_ROOT / "data" / "letters" / "emnist_letters_v3_halfright.npz"
 EMNIST_SPLIT = "test"
 
 SAVE_ROOT = PROJECT_ROOT / "data" / "output"
-RUN_NAME = "infer_v3_halfright"
 ELECTRODE_ON_THRESHOLD = 0.5
+LOSS_VARIANTS = [
+    "v3_1_baseline",
+    "v3_2_no_sparsity",
+    "v3_3_no_invalid_region",
+    "v3_4_no_aux",
+]
 
 
 def _get_device() -> torch.device:
@@ -107,15 +112,6 @@ def main() -> None:
         f"with {n_samples} samples"
     )
 
-    # ------------------------------------------------------------------
-    # Load model and simulator
-    # ------------------------------------------------------------------
-    print(f"[PhosOpt][infer] Loading model from: {MODEL_PATH}")
-    model = InverseModel(in_channels=1, latent_dim=256, electrode_dim=1000)
-    state = torch.load(MODEL_PATH, map_location=device)
-    model.load_state_dict(state)
-    model.to(device).eval()
-
     print(f"[PhosOpt][infer] Initializing DifferentiableSimulator from {RETINOTOPY_DIR}")
     simulator = DifferentiableSimulator(
         data_dir=RETINOTOPY_DIR,
@@ -123,142 +119,165 @@ def main() -> None:
         map_size=MAP_SIZE,
     ).to(device).eval()
 
-    # ------------------------------------------------------------------
-    # Inference over all split samples
-    # ------------------------------------------------------------------
-    run_dir = SAVE_ROOT / RUN_NAME
-    run_dir.mkdir(parents=True, exist_ok=True)
+    for variant_name in LOSS_VARIANTS:
+        model_path = SAVE_ROOT / variant_name / f"{SUBJECT_ID}_inverse_model.pt"
+        run_dir = SAVE_ROOT / f"infer_{variant_name}"
 
-    summary_rows: list[dict[str, float | int | dict[str, float]]] = []
-    all_dc: list[float] = []
-    all_y: list[float] = []
-    all_hd: list[float] = []
-    all_score: list[float] = []
-    all_loss: list[float] = []
-    all_num_active_electrodes: list[float] = []
-    all_active_ratio: list[float] = []
+        print("\n" + "=" * 80)
+        print(f"[PhosOpt][infer] Variant: {variant_name}")
+        print(f"[PhosOpt][infer] Model path: {model_path}")
+        print(f"[PhosOpt][infer] Output dir: {run_dir}")
+        print("=" * 80)
 
-    with torch.no_grad():
-        for idx in range(n_samples):
-            target = dataset[idx].unsqueeze(0).to(device)  # [1,1,H,W]
-            target_np = target[0, 0].detach().cpu().numpy()
+        if not model_path.exists():
+            print(f"[PhosOpt][infer][WARN] Model not found, skipping variant: {model_path}")
+            continue
 
-            params, electrode_logits = model(target)
-            recon = simulator(params, electrode_logits)
+        model = InverseModel(in_channels=1, latent_dim=256, electrode_dim=1000)
+        state = torch.load(model_path, map_location=device)
+        model.load_state_dict(state)
+        model.to(device).eval()
 
-            dc_metric = float(dice_score(recon, target).item())
-            hd_metric = float(hellinger_distance(recon, target).item())
-            y_metric = float(y_metric_from_params(simulator, params).item())
-            score = dc_metric + 0.1 * y_metric - hd_metric
-            loss = 2.0 - score
+        run_dir.mkdir(parents=True, exist_ok=True)
 
-            params_vec = params[0].detach().cpu().numpy().tolist()
-            elec_prob = torch.sigmoid(electrode_logits)[0].detach().cpu().numpy()
-            recon_np = recon[0, 0].detach().cpu().numpy()
-            num_active_electrodes = int((elec_prob > ELECTRODE_ON_THRESHOLD).sum())
-            active_ratio = float(num_active_electrodes / elec_prob.size)
+        summary_rows: list[dict[str, float | int | dict[str, float]]] = []
+        all_dc: list[float] = []
+        all_y: list[float] = []
+        all_hd: list[float] = []
+        all_score: list[float] = []
+        all_loss: list[float] = []
+        all_num_active_electrodes: list[float] = []
+        all_active_ratio: list[float] = []
 
-            base = run_dir / f"sample_{idx:05d}"
-            params_path = base.with_suffix(".params.json")
-            elec_path = base.with_suffix(".electrodes.npy")
-            recon_path = base.with_suffix(".recon.npy")
-            target_path = base.with_suffix(".target.npy")
-            recon_img_path = base.with_suffix(".recon.png")
-            target_img_path = base.with_suffix(".target.png")
+        with torch.no_grad():
+            for idx in range(n_samples):
+                target = dataset[idx].unsqueeze(0).to(device)  # [1,1,H,W]
+                target_np = target[0, 0].detach().cpu().numpy()
 
-            learned_params = {
-                "alpha": params_vec[0],
-                "beta": params_vec[1],
-                "offset_from_base": params_vec[2],
-                "shank_length": params_vec[3],
-            }
-            row = {
-                "sample_index": idx,
-                "learned_implant_params": learned_params,
-                "electrode_stats": {
-                    "on_threshold": ELECTRODE_ON_THRESHOLD,
-                    "num_active_electrodes": num_active_electrodes,
-                    "active_ratio": active_ratio,
-                    "mean_activation": float(elec_prob.mean()),
-                },
-                "performance": {
-                    "dc_metric": dc_metric,
-                    "y_metric": y_metric,
-                    "hd_metric": hd_metric,
-                    "score": score,
-                    "loss": loss,
-                },
-            }
-            meta = {
-                "model_path": str(MODEL_PATH),
-                "retinotopy_dir": str(RETINOTOPY_DIR),
-                "hemisphere": HEMISPHERE,
-                "map_size": MAP_SIZE,
-                "target_source": str(EMNIST_NPZ),
-                "emnist_split": EMNIST_SPLIT,
-                **row,
-            }
+                params, electrode_logits = model(target)
+                recon = simulator(params, electrode_logits)
 
-            params_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-            np.save(elec_path, elec_prob)
-            np.save(recon_path, recon_np)
-            np.save(target_path, target_np)
-            _save_map_png(recon_img_path, recon_np, title=f"Reconstructed #{idx}")
-            _save_map_png(target_img_path, target_np, title=f"Target #{idx}")
+                dc_metric = float(dice_score(recon, target).item())
+                hd_metric = float(hellinger_distance(recon, target).item())
+                y_metric = float(y_metric_from_params(simulator, params).item())
+                score = dc_metric + 0.1 * y_metric - hd_metric
+                loss = 2.0 - score
 
-            summary_rows.append(row)
-            all_dc.append(dc_metric)
-            all_y.append(y_metric)
-            all_hd.append(hd_metric)
-            all_score.append(score)
-            all_loss.append(loss)
-            all_num_active_electrodes.append(float(num_active_electrodes))
-            all_active_ratio.append(active_ratio)
+                params_vec = params[0].detach().cpu().numpy().tolist()
+                elec_prob = torch.sigmoid(electrode_logits)[0].detach().cpu().numpy()
+                recon_np = recon[0, 0].detach().cpu().numpy()
+                num_active_electrodes = int((elec_prob > ELECTRODE_ON_THRESHOLD).sum())
+                active_ratio = float(num_active_electrodes / elec_prob.size)
 
-            if (idx + 1) % 10 == 0 or (idx + 1) == n_samples:
-                print(f"[PhosOpt][infer] Processed {idx + 1}/{n_samples} samples")
+                base = run_dir / f"sample_{idx:05d}"
+                params_path = base.with_suffix(".params.json")
+                elec_path = base.with_suffix(".electrodes.npy")
+                recon_path = base.with_suffix(".recon.npy")
+                target_path = base.with_suffix(".target.npy")
+                recon_img_path = base.with_suffix(".recon.png")
+                target_img_path = base.with_suffix(".target.png")
 
-    summary = {
-        "model_path": str(MODEL_PATH),
-        "retinotopy_dir": str(RETINOTOPY_DIR),
-        "hemisphere": HEMISPHERE,
-        "map_size": MAP_SIZE,
-        "target_source": str(EMNIST_NPZ),
-        "emnist_split": EMNIST_SPLIT,
-        "num_samples": n_samples,
-        "aggregate_performance": {
-            "dc_metric": _stat(all_dc),
-            "y_metric": _stat(all_y),
-            "hd_metric": _stat(all_hd),
-            "score": _stat(all_score),
-            "loss": _stat(all_loss),
-        },
-        "aggregate_electrode_stats": {
-            "on_threshold": ELECTRODE_ON_THRESHOLD,
-            "num_active_electrodes": _stat(all_num_active_electrodes),
-            "active_ratio": _stat(all_active_ratio),
-        },
-    }
+                learned_params = {
+                    "alpha": params_vec[0],
+                    "beta": params_vec[1],
+                    "offset_from_base": params_vec[2],
+                    "shank_length": params_vec[3],
+                }
+                row = {
+                    "sample_index": idx,
+                    "learned_implant_params": learned_params,
+                    "electrode_stats": {
+                        "on_threshold": ELECTRODE_ON_THRESHOLD,
+                        "num_active_electrodes": num_active_electrodes,
+                        "active_ratio": active_ratio,
+                        "mean_activation": float(elec_prob.mean()),
+                    },
+                    "performance": {
+                        "dc_metric": dc_metric,
+                        "y_metric": y_metric,
+                        "hd_metric": hd_metric,
+                        "score": score,
+                        "loss": loss,
+                    },
+                }
+                meta = {
+                    "variant": variant_name,
+                    "model_path": str(model_path),
+                    "retinotopy_dir": str(RETINOTOPY_DIR),
+                    "hemisphere": HEMISPHERE,
+                    "map_size": MAP_SIZE,
+                    "target_source": str(EMNIST_NPZ),
+                    "emnist_split": EMNIST_SPLIT,
+                    **row,
+                }
 
-    summary_path = run_dir / "summary.json"
-    summary_jsonl_path = run_dir / "per_sample_metrics.jsonl"
-    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    with summary_jsonl_path.open("w", encoding="utf-8") as f:
-        for row in summary_rows:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                params_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+                np.save(elec_path, elec_prob)
+                np.save(recon_path, recon_np)
+                np.save(target_path, target_np)
+                _save_map_png(recon_img_path, recon_np, title=f"Reconstructed #{idx}")
+                _save_map_png(target_img_path, target_np, title=f"Target #{idx}")
 
-    print(f"[PhosOpt][infer] Saved run directory: {run_dir}")
-    print(f"[PhosOpt][infer] Saved aggregate summary: {summary_path}")
-    print(f"[PhosOpt][infer] Saved per-sample metrics JSONL: {summary_jsonl_path}")
-    print(
-        "[PhosOpt][infer] Aggregate means -> "
-        f"DC={summary['aggregate_performance']['dc_metric']['mean']:.6f}, "
-        f"Y={summary['aggregate_performance']['y_metric']['mean']:.6f}, "
-        f"HD={summary['aggregate_performance']['hd_metric']['mean']:.6f}, "
-        f"Score={summary['aggregate_performance']['score']['mean']:.6f}, "
-        f"Loss={summary['aggregate_performance']['loss']['mean']:.6f}, "
-        f"ActiveElec={summary['aggregate_electrode_stats']['num_active_electrodes']['mean']:.2f}"
-    )
+                summary_rows.append(row)
+                all_dc.append(dc_metric)
+                all_y.append(y_metric)
+                all_hd.append(hd_metric)
+                all_score.append(score)
+                all_loss.append(loss)
+                all_num_active_electrodes.append(float(num_active_electrodes))
+                all_active_ratio.append(active_ratio)
+
+                if (idx + 1) % 10 == 0 or (idx + 1) == n_samples:
+                    print(f"[PhosOpt][infer][{variant_name}] Processed {idx + 1}/{n_samples} samples")
+
+        summary = {
+            "variant": variant_name,
+            "model_path": str(model_path),
+            "retinotopy_dir": str(RETINOTOPY_DIR),
+            "hemisphere": HEMISPHERE,
+            "map_size": MAP_SIZE,
+            "target_source": str(EMNIST_NPZ),
+            "emnist_split": EMNIST_SPLIT,
+            "num_samples": n_samples,
+            "aggregate_performance": {
+                "dc_metric": _stat(all_dc),
+                "y_metric": _stat(all_y),
+                "hd_metric": _stat(all_hd),
+                "score": _stat(all_score),
+                "loss": _stat(all_loss),
+            },
+            "aggregate_electrode_stats": {
+                "on_threshold": ELECTRODE_ON_THRESHOLD,
+                "num_active_electrodes": _stat(all_num_active_electrodes),
+                "active_ratio": _stat(all_active_ratio),
+            },
+        }
+
+        summary_path = run_dir / "summary.json"
+        summary_jsonl_path = run_dir / "per_sample_metrics.jsonl"
+        summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        with summary_jsonl_path.open("w", encoding="utf-8") as f:
+            for row in summary_rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+        print(f"[PhosOpt][infer] Saved run directory: {run_dir}")
+        print(f"[PhosOpt][infer] Saved aggregate summary: {summary_path}")
+        print(f"[PhosOpt][infer] Saved per-sample metrics JSONL: {summary_jsonl_path}")
+        print(
+            "[PhosOpt][infer] Aggregate means -> "
+            f"DC={summary['aggregate_performance']['dc_metric']['mean']:.6f}, "
+            f"Y={summary['aggregate_performance']['y_metric']['mean']:.6f}, "
+            f"HD={summary['aggregate_performance']['hd_metric']['mean']:.6f}, "
+            f"Score={summary['aggregate_performance']['score']['mean']:.6f}, "
+            f"Loss={summary['aggregate_performance']['loss']['mean']:.6f}, "
+            f"ActiveElec={summary['aggregate_electrode_stats']['num_active_electrodes']['mean']:.2f}"
+        )
+
+        del model
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+    print("[PhosOpt][infer] All variants completed.")
 
 
 if __name__ == "__main__":
