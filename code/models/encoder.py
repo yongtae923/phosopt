@@ -16,7 +16,7 @@ The architecture consists of:
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Sequence
 
 import torch
 from torch import nn
@@ -70,25 +70,40 @@ class Encoder(nn.Module):
 
     Spatial path:
       256 --[conv]--> 256 --[pool]--> 128 --[pool]--> 64 --[pool]--> 32
-      --> ResBlock x4 --> conv reduce --> flatten(32x32=1024) --> Linear --> latent_dim
+      --> ResBlock xN --> conv reduce --> flatten(32x32=1024) --> Linear --> latent_dim
 
     Channel path:
-      in_channels -> 16 -> 32 -> 64 -> 128 -> (ResBlock x4) -> 64 -> 1
+      in_channels -> c1 -> c2 -> c3 -> c4 -> (ResBlock xN) -> c4/2 -> 1
     """
 
-    def __init__(self, in_channels: int = 1, latent_dim: int = 256) -> None:
+    def __init__(
+        self,
+        in_channels: int = 1,
+        latent_dim: int = 256,
+        stage_channels: Sequence[int] = (16, 32, 64, 128),
+        num_res_blocks: int = 4,
+    ) -> None:
         super().__init__()
+        if len(stage_channels) != 4:
+            raise ValueError(f"stage_channels must have 4 entries, got {len(stage_channels)}")
+        if num_res_blocks < 1:
+            raise ValueError(f"num_res_blocks must be >= 1, got {num_res_blocks}")
+
+        c1, c2, c3, c4 = (int(c) for c in stage_channels)
+        if min(c1, c2, c3, c4) < 1:
+            raise ValueError(f"all stage channels must be >= 1, got {stage_channels}")
+
+        c_mid = max(c4 // 2, 1)
+        res_blocks = [ResidualBlock(c4) for _ in range(num_res_blocks)]
+
         self.features = nn.Sequential(
-            *_conv_block(in_channels, 16),
-            *_conv_block(16, 32, pool=nn.MaxPool2d(2)),
-            *_conv_block(32, 64, pool=nn.MaxPool2d(2)),
-            *_conv_block(64, 128, pool=nn.MaxPool2d(2)),
-            ResidualBlock(128),
-            ResidualBlock(128),
-            ResidualBlock(128),
-            ResidualBlock(128),
-            *_conv_block(128, 64),
-            nn.Conv2d(64, 1, 3, padding=1),
+            *_conv_block(in_channels, c1),
+            *_conv_block(c1, c2, pool=nn.MaxPool2d(2)),
+            *_conv_block(c2, c3, pool=nn.MaxPool2d(2)),
+            *_conv_block(c3, c4, pool=nn.MaxPool2d(2)),
+            *res_blocks,
+            *_conv_block(c4, c_mid),
+            nn.Conv2d(c_mid, 1, 3, padding=1),
         )
         self.head = nn.Sequential(
             nn.Flatten(),

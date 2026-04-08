@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -14,8 +15,12 @@ import numpy as np
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-INPUT_DIR = Path(r"D:\yongtae\phosopt\data\output\infer_v3_halfright")
-OUTPUT_DIR = Path(r"D:\yongtae\phosopt\data\output\infer_v3_analysis")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_INPUT_DIR = PROJECT_ROOT / "data" / "output" / "infer_v3_halfright"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "output" / "infer_v3_analysis"
+
+INPUT_DIR = Path(os.getenv("PHOSOPT_ANALYSIS_INPUT_DIR", str(DEFAULT_INPUT_DIR)))
+OUTPUT_DIR = Path(os.getenv("PHOSOPT_ANALYSIS_OUTPUT_DIR", str(DEFAULT_OUTPUT_DIR)))
 
 PER_SAMPLE_JSONL = INPUT_DIR / "per_sample_metrics.jsonl"
 SUMMARY_JSON = INPUT_DIR / "summary.json"

@@ -17,6 +17,8 @@ The forward pass returns both the shared implant parameters and the per-image
 
 from __future__ import annotations
 
+from typing import Sequence
+
 import torch
 from torch import nn
 
@@ -40,6 +42,8 @@ class InverseModel(nn.Module):
         latent_dim: int = 256,
         electrode_dim: int = 1000,
         bounds: ParameterBounds | None = None,
+        encoder_stage_channels: Sequence[int] = (16, 32, 64, 128),
+        encoder_num_res_blocks: int = 4,
     ) -> None:
         super().__init__()
         self.bounds = bounds or ParameterBounds()
@@ -47,7 +51,12 @@ class InverseModel(nn.Module):
         # Raw (pre-sigmoid) shared implant parameters — learned globally
         self._shared_params_raw = nn.Parameter(torch.zeros(4))
 
-        self.encoder = Encoder(in_channels=in_channels, latent_dim=latent_dim)
+        self.encoder = Encoder(
+            in_channels=in_channels,
+            latent_dim=latent_dim,
+            stage_channels=encoder_stage_channels,
+            num_res_blocks=encoder_num_res_blocks,
+        )
         self.electrode_head = ElectrodeHead(
             latent_dim=latent_dim,
             electrode_dim=electrode_dim,

@@ -57,6 +57,38 @@ RUN_NAME = "infer_v3_halfright"
 ELECTRODE_ON_THRESHOLD = 0.5
 
 
+def _get_encoder_config_from_env() -> tuple[tuple[int, int, int, int], int]:
+    default_stage_channels = (16, 32, 64, 128)
+    default_res_blocks = 4
+
+    stage_raw = os.getenv("PHOSOPT_ENCODER_STAGE_CHANNELS", "").strip()
+    if not stage_raw:
+        stage_channels = default_stage_channels
+    else:
+        try:
+            parsed = tuple(int(x.strip()) for x in stage_raw.split(","))
+            if len(parsed) != 4 or min(parsed) < 1:
+                raise ValueError
+            stage_channels = parsed
+        except Exception:
+            print(
+                "[WARNING][infer] Invalid PHOSOPT_ENCODER_STAGE_CHANNELS. "
+                "Using default (16,32,64,128)."
+            )
+            stage_channels = default_stage_channels
+
+    res_raw = os.getenv("PHOSOPT_ENCODER_RES_BLOCKS", str(default_res_blocks)).strip()
+    try:
+        num_res_blocks = int(res_raw)
+        if num_res_blocks < 1:
+            raise ValueError
+    except Exception:
+        print("[WARNING][infer] Invalid PHOSOPT_ENCODER_RES_BLOCKS. Using default 4.")
+        num_res_blocks = default_res_blocks
+
+    return stage_channels, num_res_blocks
+
+
 def _get_device() -> torch.device:
     if torch.cuda.is_available():
         try:
@@ -91,6 +123,11 @@ def _save_map_png(path: Path, arr: np.ndarray, title: str) -> None:
 def main() -> None:
     device = _get_device()
     print(f"[PhosOpt][infer] Using device: {device}")
+    encoder_stage_channels, encoder_num_res_blocks = _get_encoder_config_from_env()
+    print(
+        f"[PhosOpt][infer] Encoder config: stage_channels={encoder_stage_channels}, "
+        f"res_blocks={encoder_num_res_blocks}"
+    )
 
     # ------------------------------------------------------------------
     # Load dataset split
@@ -110,9 +147,16 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Load model and simulator
     # ------------------------------------------------------------------
-    print(f"[PhosOpt][infer] Loading model from: {MODEL_PATH}")
-    model = InverseModel(in_channels=1, latent_dim=256, electrode_dim=1000)
-    state = torch.load(MODEL_PATH, map_location=device)
+    model_path = Path(os.getenv("PHOSOPT_MODEL_PATH", str(MODEL_PATH)))
+    print(f"[PhosOpt][infer] Loading model from: {model_path}")
+    model = InverseModel(
+        in_channels=1,
+        latent_dim=256,
+        electrode_dim=1000,
+        encoder_stage_channels=encoder_stage_channels,
+        encoder_num_res_blocks=encoder_num_res_blocks,
+    )
+    state = torch.load(model_path, map_location=device)
     model.load_state_dict(state)
     model.to(device).eval()
 
@@ -126,7 +170,8 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Inference over all split samples
     # ------------------------------------------------------------------
-    run_dir = SAVE_ROOT / RUN_NAME
+    run_dir_raw = os.getenv("PHOSOPT_INFER_RUN_DIR", "").strip()
+    run_dir = Path(run_dir_raw) if run_dir_raw else (SAVE_ROOT / RUN_NAME)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     summary_rows: list[dict[str, float | int | dict[str, float]]] = []
@@ -190,12 +235,16 @@ def main() -> None:
                 },
             }
             meta = {
-                "model_path": str(MODEL_PATH),
+                "model_path": str(model_path),
                 "retinotopy_dir": str(RETINOTOPY_DIR),
                 "hemisphere": HEMISPHERE,
                 "map_size": MAP_SIZE,
                 "target_source": str(EMNIST_NPZ),
                 "emnist_split": EMNIST_SPLIT,
+                "encoder": {
+                    "stage_channels": list(encoder_stage_channels),
+                    "num_res_blocks": int(encoder_num_res_blocks),
+                },
                 **row,
             }
 
@@ -219,12 +268,16 @@ def main() -> None:
                 print(f"[PhosOpt][infer] Processed {idx + 1}/{n_samples} samples")
 
     summary = {
-        "model_path": str(MODEL_PATH),
+        "model_path": str(model_path),
         "retinotopy_dir": str(RETINOTOPY_DIR),
         "hemisphere": HEMISPHERE,
         "map_size": MAP_SIZE,
         "target_source": str(EMNIST_NPZ),
         "emnist_split": EMNIST_SPLIT,
+        "encoder": {
+            "stage_channels": list(encoder_stage_channels),
+            "num_res_blocks": int(encoder_num_res_blocks),
+        },
         "num_samples": n_samples,
         "aggregate_performance": {
             "dc_metric": _stat(all_dc),

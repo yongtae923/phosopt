@@ -72,19 +72,19 @@ SUBJECT_ID = "single_subject"
 RETINOTOPY_DIR = PROJECT_ROOT / "data" / "fmri" / "100610"
 HEMISPHERE = "LH"
 BATCH_SIZE = 8
-EPOCHS = 50
+EPOCHS = 30
 LR = 1e-3
 SHARED_PARAMS_LR = 1e-2
-MIN_EPOCHS = 20
+MIN_EPOCHS = 10
 EARLY_STOP_PATIENCE = 5
 SEED = 42
-SAVE_DIR = PROJECT_ROOT / "data" / "output" / "inverse_training_v3_halfright"
+SAVE_DIR = Path(os.getenv("PHOSOPT_SAVE_DIR", str(PROJECT_ROOT / "data" / "output" / "inverse_training_v3_halfright")))
 VALID_ELECTRODE_MASK = None
 SIMULATOR = "diff"
 MAP_SIZE = 256
 ALLOW_NONDIFF_TRAINING = False
 RESUME = None
-NO_RESUME = False
+NO_RESUME = os.getenv("PHOSOPT_NO_RESUME", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
 DEFAULT_GPU_MEM_FRACTION = 0.90
 
 
@@ -135,6 +135,41 @@ def _get_cpu_worker_count() -> int:
     return max(1, workers)
 
 
+def _get_encoder_config_from_env() -> tuple[tuple[int, int, int, int], int]:
+    default_stage_channels = (16, 32, 64, 128)
+    default_res_blocks = 4
+
+    stage_raw = os.getenv("PHOSOPT_ENCODER_STAGE_CHANNELS", "").strip()
+    if not stage_raw:
+        stage_channels = default_stage_channels
+    else:
+        try:
+            parsed = tuple(int(x.strip()) for x in stage_raw.split(","))
+            if len(parsed) != 4 or min(parsed) < 1:
+                raise ValueError
+            stage_channels = parsed
+        except Exception:
+            print(
+                "[WARNING] Invalid PHOSOPT_ENCODER_STAGE_CHANNELS. "
+                "Expected 'c1,c2,c3,c4' with positive ints. Falling back to default (16,32,64,128)."
+            )
+            stage_channels = default_stage_channels
+
+    res_raw = os.getenv("PHOSOPT_ENCODER_RES_BLOCKS", str(default_res_blocks)).strip()
+    try:
+        num_res_blocks = int(res_raw)
+        if num_res_blocks < 1:
+            raise ValueError
+    except Exception:
+        print(
+            "[WARNING] Invalid PHOSOPT_ENCODER_RES_BLOCKS. "
+            "Expected integer >= 1. Falling back to default 4."
+        )
+        num_res_blocks = default_res_blocks
+
+    return stage_channels, num_res_blocks
+
+
 def _load_valid_electrode_mask(path: Path | None, device: torch.device) -> torch.Tensor | None:
     if path is None:
         return None
@@ -172,6 +207,12 @@ def main() -> None:
     device = _get_device()
     use_cuda = device.type == "cuda"
     print(f"Device: {device}", flush=True)
+    encoder_stage_channels, encoder_num_res_blocks = _get_encoder_config_from_env()
+    print(
+        f"Encoder config: stage_channels={encoder_stage_channels}, "
+        f"res_blocks={encoder_num_res_blocks}",
+        flush=True,
+    )
 
     if not use_cuda:
         torch.set_num_threads(_get_cpu_worker_count())
@@ -249,7 +290,13 @@ def main() -> None:
     _print_runtime_info(device=device, num_workers=num_workers, gpu_mem_fraction=gpu_mem_fraction)
 
     print("Building model...", flush=True)
-    model = InverseModel(in_channels=1, latent_dim=256, electrode_dim=1000)
+    model = InverseModel(
+        in_channels=1,
+        latent_dim=256,
+        electrode_dim=1000,
+        encoder_stage_channels=encoder_stage_channels,
+        encoder_num_res_blocks=encoder_num_res_blocks,
+    )
 
     if SIMULATOR == "diff":
         print(f"Loading retinotopy data from {RETINOTOPY_DIR}...", flush=True)
@@ -350,6 +397,10 @@ def main() -> None:
         "config": {
             "loss": loss_config.__dict__,
             "train": train_config.__dict__,
+            "encoder": {
+                "stage_channels": list(encoder_stage_channels),
+                "num_res_blocks": int(encoder_num_res_blocks),
+            },
         },
     }
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
