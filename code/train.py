@@ -85,6 +85,37 @@ MAP_SIZE = 256
 ALLOW_NONDIFF_TRAINING = False
 RESUME = None
 NO_RESUME = False
+DEFAULT_GPU_MEM_FRACTION = 0.90
+
+
+def _configure_cuda_memory_fraction() -> float | None:
+    """Apply per-process CUDA memory cap.
+
+    Uses GPU_MEM_FRACTION env var when set, otherwise defaults to 0.90.
+    """
+    raw = os.getenv("GPU_MEM_FRACTION")
+    if raw is None or raw.strip() == "":
+        fraction = DEFAULT_GPU_MEM_FRACTION
+    else:
+        try:
+            fraction = float(raw)
+        except ValueError:
+            print(f"[WARNING] Invalid GPU_MEM_FRACTION='{raw}'. Expected a float in (0, 1].")
+            return None
+
+    if not (0.0 < fraction <= 1.0):
+        print(f"[WARNING] GPU_MEM_FRACTION out of range: {fraction}. Expected (0, 1].")
+        return None
+
+    if not torch.cuda.is_available():
+        return None
+
+    try:
+        torch.cuda.set_per_process_memory_fraction(fraction, device=0)
+        return fraction
+    except Exception as exc:
+        print(f"[WARNING] Failed to apply GPU_MEM_FRACTION={fraction}: {exc}")
+        return None
 
 
 def _get_device() -> torch.device:
@@ -115,12 +146,16 @@ def _load_valid_electrode_mask(path: Path | None, device: torch.device) -> torch
     return mask.unsqueeze(0)
 
 
-def _print_runtime_info(device: torch.device, num_workers: int) -> None:
+def _print_runtime_info(device: torch.device, num_workers: int, gpu_mem_fraction: float | None) -> None:
     print("=== Runtime Info ===")
     print(f"Torch version: {torch.__version__}")
     print(f"Selected device: {device}")
     print(f"CUDA available: {torch.cuda.is_available()}")
     print(f"DataLoader workers: {num_workers}")
+    if gpu_mem_fraction is not None:
+        print(f"GPU memory cap (per-process): {gpu_mem_fraction:.2f}")
+    else:
+        print("GPU memory cap (per-process): not set")
     if device.type == "cuda":
         idx = torch.cuda.current_device()
         print(f"CUDA device index: {idx}")
@@ -133,6 +168,7 @@ def _print_runtime_info(device: torch.device, num_workers: int) -> None:
 def main() -> None:
     print("Starting PhosOpt training...", flush=True)
     torch.manual_seed(SEED)
+    gpu_mem_fraction = _configure_cuda_memory_fraction()
     device = _get_device()
     use_cuda = device.type == "cuda"
     print(f"Device: {device}", flush=True)
@@ -210,7 +246,7 @@ def main() -> None:
         f"Dataset split sizes -> train: {len(train_set)}, val: {len(val_set)}, test: {len(test_set)}",
         flush=True,
     )
-    _print_runtime_info(device=device, num_workers=num_workers)
+    _print_runtime_info(device=device, num_workers=num_workers, gpu_mem_fraction=gpu_mem_fraction)
 
     print("Building model...", flush=True)
     model = InverseModel(in_channels=1, latent_dim=256, electrode_dim=1000)
