@@ -295,12 +295,13 @@ def train_inverse_model(
         )
 
         if dev.type == "cuda":
-            mem = torch.cuda.memory_allocated(dev) / (1024**2)
+            mem_alloc = torch.cuda.memory_allocated(dev) / (1024**2)
+            mem_reserved = torch.cuda.memory_reserved(dev) / (1024**2)
             print(
                 f"[Epoch {epoch + 1}/{train_config.epochs}] "
                 f"loss={avg_total:.4e} main={avg_main:.4e} "
                 f"val_total_loss={val['total_loss']:.4e} val_mse={val['mse']:.4e} val_dice={val['dice']:.4f} "
-                f"params={sp_str} cuda={mem:.0f}MiB"
+                f"params={sp_str} cuda_alloc={mem_alloc:.0f}MiB cuda_reserved={mem_reserved:.0f}MiB"
                 f"{' *best*' if is_best else ''}"
             )
         else:

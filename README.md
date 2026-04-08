@@ -70,6 +70,10 @@ Then the simulator reconstructs a phosphene map, and training minimizes reconstr
 ## Device and performance behavior
 
 - GPU: uses CUDA automatically when available (`torch.cuda.is_available()`).
+- Optional GPU headroom: set `GPU_MEM_FRACTION` in `(0, 1]` to cap per-process CUDA memory usage.
+  - example: `GPU_MEM_FRACTION=0.90 python code/train.py ...`
+  - PowerShell example: `$env:GPU_MEM_FRACTION='0.90'; python code/train.py`
+  - if unset, default cap `0.90` is applied.
 - CPU fallback:
   - DataLoader workers = `max(1, int(cpu_count * 0.8))`
   - `torch.set_num_threads(max(1, int(cpu_count * 0.8)))`
