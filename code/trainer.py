@@ -222,7 +222,6 @@ def train_inverse_model(
                 electrode_logits=electrode_logits,
                 simulator=simulator,
                 valid_electrode_mask=valid_electrode_mask,
-                epoch_idx=epoch,
                 config=loss_config,
             )
             loss = losses["total"]
@@ -352,7 +351,6 @@ def evaluate_inverse_model(
         params, electrode_logits = model(target)
         recon = simulator(params, electrode_logits)
         
-        # Compute loss (use epoch_idx=500 to ensure warmup scale is 1.0 for validation)
         losses = build_losses(
             recon=recon,
             target=target,
@@ -360,7 +358,6 @@ def evaluate_inverse_model(
             electrode_logits=electrode_logits,
             simulator=simulator,
             valid_electrode_mask=None,
-            epoch_idx=500,  # Large epoch to disable warmup, full auxiliary terms
             config=loss_config,
         )
         

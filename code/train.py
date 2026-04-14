@@ -262,11 +262,7 @@ def main() -> None:
     else:
         print("Using numpy simulator (non-differentiable, debug only)", flush=True)
         simulator = NumpySimulatorAdapter(data_dir=RETINOTOPY_DIR, hemisphere=HEMISPHERE)
-    loss_config = LossConfig(
-        sparsity_weight=1e-3,
-        invalid_region_weight=1e-3,
-        warmup_epochs=10,
-    )
+    loss_config = LossConfig()
     train_config = TrainConfig(
         epochs=EPOCHS,
         batch_size=BATCH_SIZE,
