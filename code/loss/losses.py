@@ -110,7 +110,7 @@ def build_losses(
     y = y_metric_from_params(simulator, params)
     hd = hellinger_distance(recon, target)
     loss_main = 2.0 - dc_soft - 0.1 * y + hd
-    
+
     return {
         "total": loss_main,
         "loss_main": loss_main,
