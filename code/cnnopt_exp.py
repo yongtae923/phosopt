@@ -95,7 +95,7 @@ def main() -> None:
         _run_command([sys.executable, str(CODE_DIR / "train.py")], env=env, tag=f"{variant.name}:train")
         _run_command([sys.executable, str(CODE_DIR / "infer.py")], env=env, tag=f"{variant.name}:infer")
         _run_command(
-            [sys.executable, str(CODE_DIR / "util" / "v3_infer_result_analysis.py")],
+            [sys.executable, str(CODE_DIR / "analysis.py")],
             env=env,
             tag=f"{variant.name}:analysis",
         )

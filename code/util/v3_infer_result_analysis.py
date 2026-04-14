@@ -68,6 +68,22 @@ def _copy_if_exists(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
+def _save_map_png_from_npy(npy_path: Path, out_png_path: Path, title: str) -> None:
+    if not npy_path.exists():
+        return
+
+    arr = np.load(npy_path)
+    arr = np.asarray(arr, dtype=np.float32)
+
+    plt.figure(figsize=(5, 5), dpi=150)
+    plt.imshow(arr, cmap="gray", vmin=0.0, vmax=1.0)
+    plt.title(title)
+    plt.axis("off")
+    plt.tight_layout()
+    plt.savefig(out_png_path, bbox_inches="tight", pad_inches=0.02)
+    plt.close()
+
+
 def _extract_row_from_sample_json(path: Path) -> dict[str, Any] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -473,16 +489,16 @@ def _copy_case_files(case_rows: list[dict[str, Any]], dst_dir: Path, prefix: str
         ]
         meta_path.write_text("\n".join(lines), encoding="utf-8")
 
-        if srcs["target_png"].exists():
-            _copy_if_exists(
-                srcs["target_png"],
-                dst_dir / f"{prefix}_{rank:02d}_sample_{int(sample_index):05d}_target.png",
-            )
-        if srcs["recon_png"].exists():
-            _copy_if_exists(
-                srcs["recon_png"],
-                dst_dir / f"{prefix}_{rank:02d}_sample_{int(sample_index):05d}_recon.png",
-            )
+        _save_map_png_from_npy(
+            srcs["target_npy"],
+            dst_dir / f"{prefix}_{rank:02d}_sample_{int(sample_index):05d}_target.png",
+            title=f"Target #{int(sample_index)}",
+        )
+        _save_map_png_from_npy(
+            srcs["recon_npy"],
+            dst_dir / f"{prefix}_{rank:02d}_sample_{int(sample_index):05d}_recon.png",
+            title=f"Reconstructed #{int(sample_index)}",
+        )
         if srcs["params_json"].exists():
             _copy_if_exists(
                 srcs["params_json"],
