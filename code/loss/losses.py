@@ -3,17 +3,14 @@
 """
 Loss functions for PhosOpt inverse model training.
 This module defines:
-- `LossConfig`: Configuration for weighting auxiliary loss components.
+- `LossConfig`: Configuration placeholder.
 - `build_losses`: Function to compute total loss as:
     L_main = 2 - dc_soft - 0.1*y + hd
-    L_total = L_main + λs*sparsity + λi*invalid_region
 
 Where:
 - dc_soft = 1 - soft_dice_loss(recon, target) [soft Dice score]
 - y = contact yield from simulator
 - hd = Hellinger distance between recon and target
-- sparsity = mean electrode activation probability
-- invalid_region = penalty for activations in invalid electrode locations
 """
 
 from __future__ import annotations
@@ -26,15 +23,7 @@ import torch.nn.functional as F
 
 @dataclass(frozen=True)
 class LossConfig:
-    sparsity_weight: float = 1e-3
-    invalid_region_weight: float = 1e-3
-    warmup_epochs: int = 10
-
-
-def linear_warmup_scale(epoch_idx: int, warmup_epochs: int) -> float:
-    if warmup_epochs <= 0:
-        return 1.0
-    return float(min(1.0, (epoch_idx + 1) / warmup_epochs))
+    pass
 
 
 def soft_dice_loss(
@@ -100,10 +89,9 @@ def build_losses(
     electrode_logits: torch.Tensor,
     simulator: torch.nn.Module,
     valid_electrode_mask: torch.Tensor | None,
-    epoch_idx: int,
     config: LossConfig,
 ) -> dict[str, torch.Tensor]:
-    """Compute vimplant-objective-based loss with auxiliary regularization terms.
+    """Compute vimplant-objective-based loss.
     
     Args:
         recon: Reconstructed phosphene map [B,1,H,W]
@@ -112,7 +100,6 @@ def build_losses(
         electrode_logits: Electrode logits [B,1000]
         simulator: DifferentiableSimulator for y metric
         valid_electrode_mask: Electrode validity mask or None
-        epoch_idx: Current epoch for warmup scheduling
         config: Loss configuration
     
     Returns:
@@ -124,30 +111,10 @@ def build_losses(
     hd = hellinger_distance(recon, target)
     loss_main = 2.0 - dc_soft - 0.1 * y + hd
 
-    # Auxiliary regularization terms
-    electrode_prob = torch.sigmoid(electrode_logits)
-    sparsity_loss = electrode_prob.mean()
-
-    if valid_electrode_mask is None:
-        invalid_region_loss = torch.zeros((), device=recon.device)
-    else:
-        invalid_mask = (1.0 - valid_electrode_mask).to(recon.device)
-        invalid_region_loss = (electrode_prob * invalid_mask).mean()
-
-    # Apply warmup to auxiliary terms
-    warm = linear_warmup_scale(epoch_idx=epoch_idx, warmup_epochs=config.warmup_epochs)
-    total = (
-        loss_main
-        + warm * config.sparsity_weight * sparsity_loss
-        + warm * config.invalid_region_weight * invalid_region_loss
-    )
-    
     return {
-        "total": total,
+        "total": loss_main,
         "loss_main": loss_main,
         "dc_soft": dc_soft,
         "y_metric": y,
         "hd_metric": hd,
-        "sparsity": sparsity_loss,
-        "invalid_region": invalid_region_loss,
     }
