@@ -110,14 +110,14 @@ def _stat(values: list[float]) -> dict[str, float]:
     }
 
 
-def _save_map_png(path: Path, arr: np.ndarray, title: str) -> None:
-    plt.figure(figsize=(5, 5), dpi=150)
-    plt.imshow(arr, cmap="gray", vmin=0.0, vmax=1.0)
-    plt.title(title)
-    plt.axis("off")
-    plt.tight_layout()
-    plt.savefig(path, bbox_inches="tight", pad_inches=0.02)
-    plt.close()
+# def _save_map_png(path: Path, arr: np.ndarray, title: str) -> None:
+#     plt.figure(figsize=(5, 5), dpi=150)
+#     plt.imshow(arr, cmap="gray", vmin=0.0, vmax=1.0)
+#     plt.title(title)
+#     plt.axis("off")
+#     plt.tight_layout()
+#     plt.savefig(path, bbox_inches="tight", pad_inches=0.02)
+#     plt.close()
 
 
 def main() -> None:
@@ -208,8 +208,8 @@ def main() -> None:
             elec_path = base.with_suffix(".electrodes.npy")
             recon_path = base.with_suffix(".recon.npy")
             target_path = base.with_suffix(".target.npy")
-            recon_img_path = base.with_suffix(".recon.png")
-            target_img_path = base.with_suffix(".target.png")
+            # recon_img_path = base.with_suffix(".recon.png")
+            # target_img_path = base.with_suffix(".target.png")
 
             learned_params = {
                 "alpha": params_vec[0],
@@ -252,8 +252,8 @@ def main() -> None:
             np.save(elec_path, elec_prob)
             np.save(recon_path, recon_np)
             np.save(target_path, target_np)
-            _save_map_png(recon_img_path, recon_np, title=f"Reconstructed #{idx}")
-            _save_map_png(target_img_path, target_np, title=f"Target #{idx}")
+            # _save_map_png(recon_img_path, recon_np, title=f"Reconstructed #{idx}")
+            # _save_map_png(target_img_path, target_np, title=f"Target #{idx}")
 
             summary_rows.append(row)
             all_dc.append(dc_metric)
