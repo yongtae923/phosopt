@@ -44,14 +44,32 @@ class TrainConfig:
     allow_nondiff_training: bool = False
     refinement_steps: int = 0
     refinement_lr: float = 1e-2
-    scheduler_patience: int = 10
+    scheduler_patience: int = 3
     scheduler_factor: float = 0.5
-    min_epochs_for_early_stop: int = 20
-    patience_for_early_stop: int = 5
+    early_stop_min_delta: float = 1e-4
+    monitor_metric: str = "total_loss"
+    monitor_mode: str = "min"
+    min_epochs_for_early_stop: int = 10
+    patience_for_early_stop: int = 8
 
 
 def _device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _monitor_better(candidate: float, best: float, mode: str, min_delta: float) -> bool:
+    if mode == "min":
+        return candidate < (best - min_delta)
+    if mode == "max":
+        return candidate > (best + min_delta)
+    raise ValueError(f"monitor_mode must be 'min' or 'max', got {mode!r}")
+
+
+def _get_monitor_value(metrics: dict[str, float], metric_name: str) -> float:
+    if metric_name not in metrics:
+        available = ", ".join(sorted(metrics))
+        raise KeyError(f"Unknown monitor_metric {metric_name!r}. Available metrics: {available}")
+    return float(metrics[metric_name])
 
 
 def _run_refinement(
@@ -87,6 +105,7 @@ def _save_checkpoint(
     scheduler: ReduceLROnPlateau,
     history: dict[str, list[float]],
     best_val_total_loss: float,
+    best_monitor_value: float,
 ) -> None:
     torch.save(
         {
@@ -96,6 +115,7 @@ def _save_checkpoint(
             "scheduler_state_dict": scheduler.state_dict(),
             "history": history,
             "best_val_total_loss": best_val_total_loss,
+            "best_monitor_value": best_monitor_value,
         },
         path,
     )
@@ -145,9 +165,12 @@ def train_inverse_model(
     )
     scheduler = ReduceLROnPlateau(
         opt,
-        mode="min",
+        mode=train_config.monitor_mode,
         factor=train_config.scheduler_factor,
         patience=train_config.scheduler_patience,
+        threshold=train_config.early_stop_min_delta,
+        threshold_mode="abs",
+        min_lr=1e-6,
     )
 
     # Defaults
@@ -166,10 +189,7 @@ def train_inverse_model(
     if resume_checkpoint is not None:
         start_epoch = resume_checkpoint["epoch"] + 1
         history = resume_checkpoint["history"]
-        best_val_total_loss = resume_checkpoint.get(
-            "best_val_total_loss",
-            resume_checkpoint.get("best_val_mse", float("inf")),
-        )
+        best_val_total_loss = resume_checkpoint.get("best_val_total_loss", float("inf"))
         if "train_main" not in history and "train_recon" in history:
             history["train_main"] = history["train_recon"]
         opt.load_state_dict(resume_checkpoint["optimizer_state_dict"])
@@ -186,8 +206,15 @@ def train_inverse_model(
     print(f"[EarlyStopping] Min epochs: {train_config.min_epochs_for_early_stop}, "
           f"Patience: {train_config.patience_for_early_stop}")
 
+    if train_config.scheduler_patience >= train_config.patience_for_early_stop:
+        print(
+            "[WARNING] scheduler_patience is not lower than patience_for_early_stop. "
+            "Early stopping may trigger before the scheduler reduces LR."
+        )
+
     # Early stopping tracking
     epochs_without_improvement = 0
+    best_monitor_value = resume_checkpoint.get("best_monitor_value", best_val_total_loss) if resume_checkpoint is not None else best_val_total_loss
 
     for epoch in range(start_epoch, train_config.epochs):
         model.train()
@@ -270,18 +297,30 @@ def train_inverse_model(
         history["train_main"].append(avg_main)
 
         val = evaluate_inverse_model(
-            model=model, simulator=simulator, data_loader=val_loader, loss_config=loss_config, device=dev,
+            model=model,
+            simulator=simulator,
+            data_loader=val_loader,
+            loss_config=loss_config,
+            device=dev,
+            valid_electrode_mask=valid_electrode_mask,
         )
         history["val_total_loss"].append(val["total_loss"])
         history["val_mse"].append(val["mse"])
         history["val_dice"].append(val["dice"])
         history["val_hellinger"].append(val["hellinger"])
 
-        scheduler.step(val["total_loss"])
+        monitor_value = _get_monitor_value(val, train_config.monitor_metric)
+        scheduler.step(monitor_value)
 
-        # Track best and early stopping (based on val_total_loss)
-        is_best = val["total_loss"] < best_val_total_loss
+        # Track best and early stopping based on the configured monitor metric.
+        is_best = _monitor_better(
+            candidate=monitor_value,
+            best=best_monitor_value,
+            mode=train_config.monitor_mode,
+            min_delta=train_config.early_stop_min_delta,
+        )
         if is_best:
+            best_monitor_value = monitor_value
             best_val_total_loss = val["total_loss"]
             epochs_without_improvement = 0
         else:
@@ -298,6 +337,7 @@ def train_inverse_model(
             print(
                 f"[Epoch {epoch + 1}/{train_config.epochs}] "
                 f"loss={avg_total:.4e} main={avg_main:.4e} "
+                f"val_{train_config.monitor_metric}={monitor_value:.4e} "
                 f"val_total_loss={val['total_loss']:.4e} val_mse={val['mse']:.4e} val_dice={val['dice']:.4f} "
                 f"params={sp_str} cuda={mem:.0f}MiB"
                 f"{' *best*' if is_best else ''}"
@@ -306,6 +346,7 @@ def train_inverse_model(
             print(
                 f"[Epoch {epoch + 1}/{train_config.epochs}] "
                 f"loss={avg_total:.4e} main={avg_main:.4e} "
+                f"val_{train_config.monitor_metric}={monitor_value:.4e} "
                 f"val_total_loss={val['total_loss']:.4e} val_mse={val['mse']:.4e} val_dice={val['dice']:.4f} "
                 f"params={sp_str} (CPU)"
                 f"{' *best*' if is_best else ''}"
@@ -314,11 +355,32 @@ def train_inverse_model(
         # Save checkpoint every epoch
         if checkpoint_dir is not None:
             ckpt_path = checkpoint_dir / "checkpoint_latest.pt"
-            _save_checkpoint(ckpt_path, epoch, model, opt, scheduler, history, best_val_total_loss)
+            _save_checkpoint(
+                ckpt_path,
+                epoch,
+                model,
+                opt,
+                scheduler,
+                history,
+                best_val_total_loss,
+                best_monitor_value,
+            )
             if is_best:
                 best_path = checkpoint_dir / "checkpoint_best.pt"
-                _save_checkpoint(best_path, epoch, model, opt, scheduler, history, best_val_total_loss)
-                print(f"  [ckpt] Saved best checkpoint (val_total_loss={best_val_total_loss:.4e})")
+                _save_checkpoint(
+                    best_path,
+                    epoch,
+                    model,
+                    opt,
+                    scheduler,
+                    history,
+                    best_val_total_loss,
+                    best_monitor_value,
+                )
+                print(
+                    f"  [ckpt] Saved best checkpoint ({train_config.monitor_metric}={best_monitor_value:.4e}, "
+                    f"val_total_loss={best_val_total_loss:.4e})"
+                )
 
         # Early stopping check
         if epoch + 1 >= train_config.min_epochs_for_early_stop and \
@@ -337,6 +399,7 @@ def evaluate_inverse_model(
     data_loader: DataLoader,
     loss_config: LossConfig,
     device: torch.device | None = None,
+    valid_electrode_mask: torch.Tensor | None = None,
 ) -> dict[str, float]:
     dev = device or _device()
     model.eval()
@@ -357,7 +420,7 @@ def evaluate_inverse_model(
             params=params,
             electrode_logits=electrode_logits,
             simulator=simulator,
-            valid_electrode_mask=None,
+            valid_electrode_mask=valid_electrode_mask,
             config=loss_config,
         )
         
