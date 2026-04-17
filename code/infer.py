@@ -47,9 +47,9 @@ from simulator.physics_forward_torch import DifferentiableSimulator  # noqa: E40
 MODEL_PATH = PROJECT_ROOT / "data" / "output" / "inverse_training_v3_halfright" / "single_subject_inverse_model.pt"
 RETINOTOPY_DIR = PROJECT_ROOT / "data" / "fmri" / "100610"
 HEMISPHERE = "LH"
-MAP_SIZE = 256
+MAP_SIZE = 128
 
-EMNIST_NPZ = PROJECT_ROOT / "data" / "letters" / "emnist_letters_v3_halfright.npz"
+EMNIST_NPZ = PROJECT_ROOT / "data" / "letters" / "emnist_letters_v3_halfright_128.npz"
 EMNIST_SPLIT = "test"
 
 SAVE_ROOT = PROJECT_ROOT / "data" / "output"

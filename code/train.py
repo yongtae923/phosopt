@@ -61,7 +61,7 @@ from trainer import (
 # Training configuration (edit here instead of CLI args)
 # -----------------------------------------------------------------------------
 MAPS_DIR = None
-MAPS_NPZ = PROJECT_ROOT / "data" / "letters" / "emnist_letters_v3_halfright.npz"
+MAPS_NPZ = PROJECT_ROOT / "data" / "letters" / "emnist_letters_v3_halfright_128.npz"
 MAPS_NPZ_TRAIN_KEY = "train_phosphenes"
 MAPS_NPZ_TEST_KEY = "test_phosphenes"
 VAL_RATIO_FROM_TRAIN = 0.1
@@ -75,13 +75,18 @@ BATCH_SIZE = 8
 EPOCHS = 50
 LR = 1e-3
 SHARED_PARAMS_LR = 1e-2
-MIN_EPOCHS = 20
-EARLY_STOP_PATIENCE = 5
+MIN_EPOCHS = 10
+EARLY_STOP_PATIENCE = 8
+SCHEDULER_PATIENCE = 3
+SCHEDULER_FACTOR = 0.5
+EARLY_STOP_MIN_DELTA = 1e-4
+MONITOR_METRIC = "total_loss"
+MONITOR_MODE = "min"
 SEED = 42
 SAVE_DIR = PROJECT_ROOT / "data" / "output" / "inverse_training_v3_halfright"
 VALID_ELECTRODE_MASK = None
 SIMULATOR = "diff"
-MAP_SIZE = 256
+MAP_SIZE = 128
 ALLOW_NONDIFF_TRAINING = False
 RESUME = None
 NO_RESUME = False
@@ -217,7 +222,23 @@ def main() -> None:
                 test_set = test_ds
     else:
         raise ValueError("MAPS_DIR or MAPS_NPZ must be provided")
-    num_workers = 0 if use_cuda else _get_cpu_worker_count()
+
+    sample = train_set[0]
+    if sample.ndim != 3 or sample.shape[0] != 1:
+        raise ValueError(f"Expected target sample shape [1,H,W], got {tuple(sample.shape)}")
+    target_h, target_w = int(sample.shape[-2]), int(sample.shape[-1])
+    if target_h != target_w:
+        raise ValueError(f"Target maps must be square, got {target_h}x{target_w}")
+    if target_h != MAP_SIZE:
+        raise ValueError(
+            f"Dataset map size ({target_h}x{target_w}) does not match simulator MAP_SIZE={MAP_SIZE}. "
+            "Set MAP_SIZE to the dataset resolution or resize the target maps before training."
+        )
+
+    if use_cuda:
+        num_workers = min(4, os.cpu_count() or 1)
+    else:
+        num_workers = _get_cpu_worker_count()
     train_loader = DataLoader(
         train_set,
         batch_size=BATCH_SIZE,
@@ -273,6 +294,11 @@ def main() -> None:
         allow_nondiff_training=ALLOW_NONDIFF_TRAINING,
         refinement_steps=0,
         refinement_lr=1e-2,
+        scheduler_patience=SCHEDULER_PATIENCE,
+        scheduler_factor=SCHEDULER_FACTOR,
+        early_stop_min_delta=EARLY_STOP_MIN_DELTA,
+        monitor_metric=MONITOR_METRIC,
+        monitor_mode=MONITOR_MODE,
         min_epochs_for_early_stop=MIN_EPOCHS,
         patience_for_early_stop=EARLY_STOP_PATIENCE,
     )
@@ -316,9 +342,20 @@ def main() -> None:
         resume_checkpoint=resume_ckpt,
     )
 
+    best_ckpt_path = checkpoint_dir / "checkpoint_best.pt"
+    if best_ckpt_path.exists():
+        print(f"Loading best checkpoint for final evaluation: {best_ckpt_path}", flush=True)
+        _ = load_checkpoint(best_ckpt_path, model, device)
+    else:
+        print("[WARNING] Best checkpoint not found. Using last model state for final evaluation.", flush=True)
+
     test_metrics = evaluate_inverse_model(
-        model=model.to(device), simulator=simulator.to(device), data_loader=test_loader,
-        loss_config=loss_config, device=device
+        model=model.to(device),
+        simulator=simulator.to(device),
+        data_loader=test_loader,
+        loss_config=loss_config,
+        device=device,
+        valid_electrode_mask=valid_mask,
     )
     random_baseline = evaluate_random_baseline(simulator=simulator.to(device), data_loader=test_loader)
     four_param_baseline = evaluate_four_param_baseline(
