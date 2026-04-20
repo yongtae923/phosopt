@@ -57,11 +57,32 @@ from trainer import (
 )
 
 
+def _get_map_size_from_env(default: int = 256) -> int:
+    raw = os.getenv("PHOSOPT_MAP_SIZE", str(default)).strip()
+    try:
+        size = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid PHOSOPT_MAP_SIZE='{raw}'. Expected integer.") from exc
+    if size < 8 or size % 8 != 0:
+        raise ValueError(f"PHOSOPT_MAP_SIZE must be divisible by 8 and >= 8, got {size}")
+    return size
+
+
+def _default_letters_npz_for_map_size(map_size: int) -> Path:
+    letters_dir = PROJECT_ROOT / "data" / "letters"
+    if map_size == 256:
+        return letters_dir / "emnist_letters_v3_halfright.npz"
+    return letters_dir / f"emnist_letters_v3_halfright_{map_size}.npz"
+
+
 # -----------------------------------------------------------------------------
 # Training configuration (edit here instead of CLI args)
 # -----------------------------------------------------------------------------
 MAPS_DIR = None
-MAPS_NPZ = PROJECT_ROOT / "data" / "letters" / "emnist_letters_v3_halfright_128.npz"
+MAP_SIZE = _get_map_size_from_env(default=256)
+MAPS_NPZ = Path(
+    os.getenv("PHOSOPT_MAPS_NPZ", str(_default_letters_npz_for_map_size(MAP_SIZE)))
+)
 MAPS_NPZ_TRAIN_KEY = "train_phosphenes"
 MAPS_NPZ_TEST_KEY = "test_phosphenes"
 VAL_RATIO_FROM_TRAIN = 0.1
@@ -86,11 +107,10 @@ SEED = 42
 SAVE_DIR = Path(os.getenv("PHOSOPT_SAVE_DIR", str(PROJECT_ROOT / "data" / "output" / "inverse_training_v3_halfright")))
 VALID_ELECTRODE_MASK = None
 SIMULATOR = "diff"
-MAP_SIZE = 128
 ALLOW_NONDIFF_TRAINING = False
 RESUME = None
 NO_RESUME = os.getenv("PHOSOPT_NO_RESUME", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
-DEFAULT_GPU_MEM_FRACTION = 0.90
+DEFAULT_GPU_MEM_FRACTION = 0.99
 
 
 def _configure_cuda_memory_fraction() -> float | None:
@@ -315,6 +335,7 @@ def main() -> None:
         in_channels=1,
         latent_dim=256,
         electrode_dim=1000,
+        input_map_size=MAP_SIZE,
         encoder_stage_channels=encoder_stage_channels,
         encoder_num_res_blocks=encoder_num_res_blocks,
     )

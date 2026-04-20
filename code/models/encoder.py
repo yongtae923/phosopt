@@ -80,6 +80,7 @@ class Encoder(nn.Module):
         self,
         in_channels: int = 1,
         latent_dim: int = 256,
+        input_map_size: int = 256,
         stage_channels: Sequence[int] = (16, 32, 64, 128),
         num_res_blocks: int = 4,
     ) -> None:
@@ -88,12 +89,18 @@ class Encoder(nn.Module):
             raise ValueError(f"stage_channels must have 4 entries, got {len(stage_channels)}")
         if num_res_blocks < 1:
             raise ValueError(f"num_res_blocks must be >= 1, got {num_res_blocks}")
+        if input_map_size < 8 or input_map_size % 8 != 0:
+            raise ValueError(
+                f"input_map_size must be divisible by 8 and >= 8, got {input_map_size}"
+            )
 
         c1, c2, c3, c4 = (int(c) for c in stage_channels)
         if min(c1, c2, c3, c4) < 1:
             raise ValueError(f"all stage channels must be >= 1, got {stage_channels}")
 
         c_mid = max(c4 // 2, 1)
+        final_hw = input_map_size // 8
+        fc_in_features = final_hw * final_hw
         res_blocks = [ResidualBlock(c4) for _ in range(num_res_blocks)]
 
         self.features = nn.Sequential(
@@ -107,7 +114,7 @@ class Encoder(nn.Module):
         )
         self.head = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(32 * 32, latent_dim),
+            nn.Linear(fc_in_features, latent_dim),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

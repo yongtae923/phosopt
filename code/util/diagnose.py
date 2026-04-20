@@ -16,9 +16,34 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
+def _get_map_size_from_env(default: int = 256) -> int:
+    raw = os.getenv("PHOSOPT_MAP_SIZE", str(default)).strip()
+    try:
+        size = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid PHOSOPT_MAP_SIZE='{raw}'. Expected integer.") from exc
+    if size < 8 or size % 8 != 0:
+        raise ValueError(f"PHOSOPT_MAP_SIZE must be divisible by 8 and >= 8, got {size}")
+    return size
+
+
+def _default_letters_npz_for_map_size(project_root: Path, map_size: int) -> Path:
+    letters_dir = project_root / "data" / "letters"
+    if map_size == 256:
+        return letters_dir / "emnist_letters_v3_halfright.npz"
+    return letters_dir / f"emnist_letters_v3_halfright_{map_size}.npz"
+
+
 def main() -> None:
-    npz_path = Path("data/letters/emnist_letters_phosphenes.npz")
-    retino_dir = Path("data/fmri/100610")
+    project_root = Path(__file__).resolve().parents[2]
+    map_size = _get_map_size_from_env(default=256)
+    npz_path = Path(
+        os.getenv(
+            "PHOSOPT_MAPS_NPZ",
+            str(_default_letters_npz_for_map_size(project_root, map_size)),
+        )
+    )
+    retino_dir = project_root / "data" / "fmri" / "100610"
 
     # ── 1. Raw data statistics ──
     print("=" * 60)
@@ -46,13 +71,18 @@ def main() -> None:
     print("STAGE 3: Model output (untrained, random weights)")
     print("=" * 60)
     from models import InverseModel
-    model = InverseModel(in_channels=1, latent_dim=128, electrode_dim=1000)
+    model = InverseModel(
+        in_channels=1,
+        latent_dim=128,
+        electrode_dim=1000,
+        input_map_size=map_size,
+    )
     model.eval()
 
     # Raw data has shape [N, 1, 256, 256]; squeeze channel for normalize, then add back
     raw_squeezed = raw[:, 0, :, :] if raw.ndim == 4 else raw
     normed = np.stack([normalize_target_map(m) for m in raw_squeezed])
-    sample = torch.from_numpy(normed[:4]).unsqueeze(1)  # [4, 1, 256, 256]
+    sample = torch.from_numpy(normed[:4]).unsqueeze(1)
     print(f"  Input tensor shape: {sample.shape}")
     print(f"  Input range: [{sample.min():.4f}, {sample.max():.4f}]")
     with torch.no_grad():
@@ -69,7 +99,7 @@ def main() -> None:
     print("STAGE 4: Simulator output")
     print("=" * 60)
     from simulator.physics_forward_torch import DifferentiableSimulator
-    sim = DifferentiableSimulator(data_dir=retino_dir, hemisphere="LH", map_size=256)
+    sim = DifferentiableSimulator(data_dir=retino_dir, hemisphere="LH", map_size=map_size)
     sim.eval()
     with torch.no_grad():
         recon = sim(params, electrode_logits)

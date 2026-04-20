@@ -41,15 +41,35 @@ from models.inverse_model import InverseModel  # noqa: E402
 from simulator.physics_forward_torch import DifferentiableSimulator  # noqa: E402
 
 
+def _get_map_size_from_env(default: int = 256) -> int:
+    raw = os.getenv("PHOSOPT_MAP_SIZE", str(default)).strip()
+    try:
+        size = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid PHOSOPT_MAP_SIZE='{raw}'. Expected integer.") from exc
+    if size < 8 or size % 8 != 0:
+        raise ValueError(f"PHOSOPT_MAP_SIZE must be divisible by 8 and >= 8, got {size}")
+    return size
+
+
+def _default_letters_npz_for_map_size(map_size: int) -> Path:
+    letters_dir = PROJECT_ROOT / "data" / "letters"
+    if map_size == 256:
+        return letters_dir / "emnist_letters_v3_halfright.npz"
+    return letters_dir / f"emnist_letters_v3_halfright_{map_size}.npz"
+
+
 # -----------------------------------------------------------------------------
 # Inference configuration (edit here instead of CLI args)
 # -----------------------------------------------------------------------------
 MODEL_PATH = PROJECT_ROOT / "data" / "output" / "inverse_training_v3_halfright" / "single_subject_inverse_model.pt"
 RETINOTOPY_DIR = PROJECT_ROOT / "data" / "fmri" / "100610"
 HEMISPHERE = "LH"
-MAP_SIZE = 128
+MAP_SIZE = _get_map_size_from_env(default=256)
 
-EMNIST_NPZ = PROJECT_ROOT / "data" / "letters" / "emnist_letters_v3_halfright_128.npz"
+EMNIST_NPZ = Path(
+    os.getenv("PHOSOPT_EMNIST_NPZ", str(_default_letters_npz_for_map_size(MAP_SIZE)))
+)
 EMNIST_SPLIT = "test"
 
 SAVE_ROOT = PROJECT_ROOT / "data" / "output"
@@ -153,6 +173,7 @@ def main() -> None:
         in_channels=1,
         latent_dim=256,
         electrode_dim=1000,
+        input_map_size=MAP_SIZE,
         encoder_stage_channels=encoder_stage_channels,
         encoder_num_res_blocks=encoder_num_res_blocks,
     )

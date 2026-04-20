@@ -23,9 +23,34 @@ from dataset import normalize_target_map
 from simulator.physics_forward_torch import DifferentiableSimulator
 
 
+def _get_map_size_from_env(default: int = 256) -> int:
+    raw = os.getenv("PHOSOPT_MAP_SIZE", str(default)).strip()
+    try:
+        size = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid PHOSOPT_MAP_SIZE='{raw}'. Expected integer.") from exc
+    if size < 8 or size % 8 != 0:
+        raise ValueError(f"PHOSOPT_MAP_SIZE must be divisible by 8 and >= 8, got {size}")
+    return size
+
+
+def _default_letters_npz_for_map_size(project_root: Path, map_size: int) -> Path:
+    letters_dir = project_root / "data" / "letters"
+    if map_size == 256:
+        return letters_dir / "emnist_letters_v3_halfright.npz"
+    return letters_dir / f"emnist_letters_v3_halfright_{map_size}.npz"
+
+
 def main() -> None:
-    npz_path = Path("data/letters/emnist_letters_phosphenes.npz")
-    retino_dir = Path("data/fmri/100610")
+    project_root = Path(__file__).resolve().parents[2]
+    map_size = _get_map_size_from_env(default=256)
+    npz_path = Path(
+        os.getenv(
+            "PHOSOPT_MAPS_NPZ",
+            str(_default_letters_npz_for_map_size(project_root, map_size)),
+        )
+    )
+    retino_dir = project_root / "data" / "fmri" / "100610"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     n_targets = 4
     n_steps = 500
@@ -37,11 +62,11 @@ def main() -> None:
     if raw.ndim == 4 and raw.shape[1] == 1:
         raw = raw[:, 0, :, :]
     normed = np.stack([normalize_target_map(m) for m in raw])
-    target = torch.from_numpy(normed).unsqueeze(1).to(device)  # [N, 1, 256, 256]
+    target = torch.from_numpy(normed).unsqueeze(1).to(device)
     print(f"Target shape: {target.shape}, range: [{target.min():.3f}, {target.max():.3f}]")
 
     # Init simulator
-    sim = DifferentiableSimulator(data_dir=retino_dir, hemisphere="LH", map_size=256)
+    sim = DifferentiableSimulator(data_dir=retino_dir, hemisphere="LH", map_size=map_size)
     sim = sim.to(device).eval()
 
     # Directly optimize parameters (no model)

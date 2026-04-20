@@ -12,6 +12,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CODE_DIR = PROJECT_ROOT / "code"
 CNNOPT_ROOT = PROJECT_ROOT / "data" / "cnnopt"
+LETTERS_DIR = PROJECT_ROOT / "data" / "letters"
+
+# Single source of truth for experiment resolution.
+MAP_SIZE = 128
 
 
 @dataclass(frozen=True)
@@ -50,6 +54,12 @@ def _run_command(command: list[str], env: dict[str, str], tag: str) -> None:
     subprocess.run(command, cwd=PROJECT_ROOT, env=env, check=True)
 
 
+def _letters_npz_for_map_size(map_size: int) -> Path:
+    if map_size == 256:
+        return LETTERS_DIR / "emnist_letters_v3_halfright.npz"
+    return LETTERS_DIR / f"emnist_letters_v3_halfright_{map_size}.npz"
+
+
 def _variant_env(base_env: dict[str, str], variant: Variant, variant_root: Path) -> dict[str, str]:
     train_dir = variant_root / "train"
     infer_dir = variant_root / "infer"
@@ -66,6 +76,10 @@ def _variant_env(base_env: dict[str, str], variant: Variant, variant_root: Path)
     env["PHOSOPT_INFER_RUN_DIR"] = str(infer_dir)
     env["PHOSOPT_ANALYSIS_INPUT_DIR"] = str(infer_dir)
     env["PHOSOPT_ANALYSIS_OUTPUT_DIR"] = str(analysis_dir)
+    env["PHOSOPT_MAP_SIZE"] = str(MAP_SIZE)
+    dataset_npz = _letters_npz_for_map_size(MAP_SIZE)
+    env["PHOSOPT_MAPS_NPZ"] = str(dataset_npz)
+    env["PHOSOPT_EMNIST_NPZ"] = str(dataset_npz)
     env["PHOSOPT_ENCODER_STAGE_CHANNELS"] = ",".join(str(c) for c in variant.stage_channels)
     env["PHOSOPT_ENCODER_RES_BLOCKS"] = str(variant.num_res_blocks)
     return env
@@ -77,6 +91,8 @@ def main() -> None:
 
     print("[cnnopt] Starting sequential CNN variant experiments", flush=True)
     print(f"[cnnopt] Output root: {CNNOPT_ROOT}", flush=True)
+    print(f"[cnnopt] MAP_SIZE={MAP_SIZE}", flush=True)
+    print(f"[cnnopt] Dataset NPZ={_letters_npz_for_map_size(MAP_SIZE)}", flush=True)
 
     for idx, variant in enumerate(VARIANTS, start=1):
         variant_root = CNNOPT_ROOT / variant.name

@@ -41,6 +41,7 @@ class InverseModel(nn.Module):
         in_channels: int = 1,
         latent_dim: int = 256,
         electrode_dim: int = 1000,
+        input_map_size: int = 256,
         bounds: ParameterBounds | None = None,
         encoder_stage_channels: Sequence[int] = (16, 32, 64, 128),
         encoder_num_res_blocks: int = 4,
@@ -54,6 +55,7 @@ class InverseModel(nn.Module):
         self.encoder = Encoder(
             in_channels=in_channels,
             latent_dim=latent_dim,
+            input_map_size=input_map_size,
             stage_channels=encoder_stage_channels,
             num_res_blocks=encoder_num_res_blocks,
         )
