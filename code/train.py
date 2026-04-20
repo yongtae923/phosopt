@@ -83,7 +83,7 @@ EARLY_STOP_MIN_DELTA = 1e-4
 MONITOR_METRIC = "total_loss"
 MONITOR_MODE = "min"
 SEED = 42
-SAVE_DIR = PROJECT_ROOT / "data" / "output" / "inverse_training_v3_halfright"
+SAVE_DIR = PROJECT_ROOT / "data" / "output" / "inverse_training_v3_halfright_128"
 VALID_ELECTRODE_MASK = None
 SIMULATOR = "diff"
 MAP_SIZE = 128
@@ -270,7 +270,7 @@ def main() -> None:
     _print_runtime_info(device=device, num_workers=num_workers, gpu_mem_fraction=gpu_mem_fraction)
 
     print("Building model...", flush=True)
-    model = InverseModel(in_channels=1, latent_dim=256, electrode_dim=1000)
+    model = InverseModel(in_channels=1, latent_dim=256, electrode_dim=1000, map_size=MAP_SIZE)
 
     if SIMULATOR == "diff":
         print(f"Loading retinotopy data from {RETINOTOPY_DIR}...", flush=True)

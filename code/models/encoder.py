@@ -62,22 +62,26 @@ class ResidualBlock(nn.Module):
 
 class Encoder(nn.Module):
     """
-    E2E-style encoder adapted for 256x256 phosphene maps.
+    E2E-style encoder adapted for variable input map sizes (e.g., 128x128, 256x256).
 
     Based on the basecode E2E_Encoder, scaled up for 256x256 input
     and modified to output a latent vector (instead of raw electrode
     amplitudes) for downstream ParameterHead consumption.
 
-    Spatial path:
-      256 --[conv]--> 256 --[pool]--> 128 --[pool]--> 64 --[pool]--> 32
-      --> ResBlock x4 --> conv reduce --> flatten(32x32=1024) --> Linear --> latent_dim
+    Spatial path (3x MaxPool2d):
+      map_size --[conv]--> map_size --[pool]--> map_size/2 --[pool]--> map_size/4 --[pool]--> map_size/8
+      --> ResBlock x4 --> conv reduce --> flatten((map_size/8)²) --> Linear --> latent_dim
 
     Channel path:
       in_channels -> 16 -> 32 -> 64 -> 128 -> (ResBlock x4) -> 64 -> 1
     """
 
-    def __init__(self, in_channels: int = 1, latent_dim: int = 256) -> None:
+    def __init__(self, in_channels: int = 1, latent_dim: int = 256, map_size: int = 128) -> None:
         super().__init__()
+        # Compute final spatial dimension after 3x downsampling (2x pooling each)
+        final_spatial_size = map_size // 8
+        linear_input_size = final_spatial_size * final_spatial_size
+        
         self.features = nn.Sequential(
             *_conv_block(in_channels, 16),
             *_conv_block(16, 32, pool=nn.MaxPool2d(2)),
@@ -92,7 +96,7 @@ class Encoder(nn.Module):
         )
         self.head = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(32 * 32, latent_dim),
+            nn.Linear(linear_input_size, latent_dim),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

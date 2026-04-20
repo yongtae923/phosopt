@@ -46,7 +46,7 @@ def main() -> None:
     print("STAGE 3: Model output (untrained, random weights)")
     print("=" * 60)
     from models import InverseModel
-    model = InverseModel(in_channels=1, latent_dim=128, electrode_dim=1000)
+    model = InverseModel(in_channels=1, latent_dim=128, electrode_dim=1000, map_size=256)
     model.eval()
 
     # Raw data has shape [N, 1, 256, 256]; squeeze channel for normalize, then add back

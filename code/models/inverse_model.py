@@ -39,6 +39,7 @@ class InverseModel(nn.Module):
         in_channels: int = 1,
         latent_dim: int = 256,
         electrode_dim: int = 1000,
+        map_size: int = 128,
         bounds: ParameterBounds | None = None,
     ) -> None:
         super().__init__()
@@ -47,7 +48,7 @@ class InverseModel(nn.Module):
         # Raw (pre-sigmoid) shared implant parameters — learned globally
         self._shared_params_raw = nn.Parameter(torch.zeros(4))
 
-        self.encoder = Encoder(in_channels=in_channels, latent_dim=latent_dim)
+        self.encoder = Encoder(in_channels=in_channels, latent_dim=latent_dim, map_size=map_size)
         self.electrode_head = ElectrodeHead(
             latent_dim=latent_dim,
             electrode_dim=electrode_dim,

@@ -111,7 +111,7 @@ def main() -> None:
     # Load model and simulator
     # ------------------------------------------------------------------
     print(f"[PhosOpt][infer] Loading model from: {MODEL_PATH}")
-    model = InverseModel(in_channels=1, latent_dim=256, electrode_dim=1000)
+    model = InverseModel(in_channels=1, latent_dim=256, electrode_dim=1000, map_size=MAP_SIZE)
     state = torch.load(MODEL_PATH, map_location=device)
     model.load_state_dict(state)
     model.to(device).eval()
