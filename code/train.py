@@ -83,14 +83,14 @@ EARLY_STOP_MIN_DELTA = 1e-4
 MONITOR_METRIC = "total_loss"
 MONITOR_MODE = "min"
 SEED = 42
-SAVE_DIR = PROJECT_ROOT / "data" / "output" / "inverse_training_v3_halfright_128"
+SAVE_DIR = PROJECT_ROOT / "data" / "output" / "0422_model"
 VALID_ELECTRODE_MASK = None
 SIMULATOR = "diff"
 MAP_SIZE = 128
 ALLOW_NONDIFF_TRAINING = False
 RESUME = None
 NO_RESUME = False
-DEFAULT_GPU_MEM_FRACTION = 0.90
+DEFAULT_GPU_MEM_FRACTION = 1
 
 
 def _configure_cuda_memory_fraction() -> float | None:
