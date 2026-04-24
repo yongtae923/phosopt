@@ -149,7 +149,7 @@ def _save_hist_grid(columns: dict[str, np.ndarray], save_path: Path) -> None:
         ax.set_ylabel("Count")
 
     fig.suptitle("Inference Result Histograms", fontsize=14)
-    fig.tight_layout(rect=[0, 0, 1, 0.98])
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.98))
     fig.savefig(save_path)
     plt.close(fig)
 

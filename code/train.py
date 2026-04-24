@@ -19,9 +19,12 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import Any
 
 # Unbuffer stdout so prints appear immediately
-sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, "reconfigure") else None
+_stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
+if callable(_stdout_reconfigure):
+    _stdout_reconfigure(line_buffering=True)
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -224,6 +227,8 @@ def main() -> None:
         raise ValueError("MAPS_DIR or MAPS_NPZ must be provided")
 
     sample = train_set[0]
+    if not isinstance(sample, torch.Tensor):
+        raise TypeError(f"Expected torch.Tensor sample, got {type(sample)!r}")
     if sample.ndim != 3 or sample.shape[0] != 1:
         raise ValueError(f"Expected target sample shape [1,H,W], got {tuple(sample.shape)}")
     target_h, target_w = int(sample.shape[-2]), int(sample.shape[-1])

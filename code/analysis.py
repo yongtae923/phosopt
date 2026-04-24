@@ -192,9 +192,10 @@ def _load_rows(input_dir: Path) -> list[dict[str, Any]]:
 
 	print(f"[INFO] Loading fallback sample JSON files: {len(sample_jsons)} files")
 	for path in sample_jsons:
-		row = _extract_row_from_sample_json(path)
-		if row is not None:
-			rows.append(row)
+		row_candidate = _extract_row_from_sample_json(path)
+		if row_candidate is None:
+			continue
+		rows.append(row_candidate)
 
 	if not rows:
 		raise RuntimeError("No valid per-sample rows could be loaded.")
@@ -362,7 +363,7 @@ def _plot_grid_hists(columns: dict[str, np.ndarray], save_path: Path) -> None:
 		ax.set_ylabel("Count")
 
 	fig.suptitle("Inference Result Histograms", fontsize=14)
-	fig.tight_layout(rect=[0, 0, 1, 0.98])
+	fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.98))
 	fig.savefig(save_path)
 	plt.close(fig)
 	print(f"[INFO] Saved histogram grid: {save_path}")

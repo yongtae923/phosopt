@@ -23,7 +23,7 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -68,7 +68,7 @@ class MetricsTracker:
 
 
 metrics_tracker = MetricsTracker()
-_original_simulator_forward = None
+_original_simulator_forward: Callable[..., Any] | None = None
 
 
 def _get_device() -> torch.device:
@@ -116,6 +116,8 @@ def _wrap_simulator(simulator: torch.nn.Module) -> None:
     _original_simulator_forward = simulator.forward
 
     def wrapped_forward(*args, **kwargs):
+        if _original_simulator_forward is None:
+            raise RuntimeError("Simulator forward wrapper not initialized")
         metrics_tracker.simulator_calls += 1
         start = time.time()
         result = _original_simulator_forward(*args, **kwargs)
@@ -445,7 +447,7 @@ def _save_strategy_plots(rows: list[dict[str, Any]], out_dir: Path) -> None:
         ax.axvline(float(vals.mean()), linestyle="--", linewidth=1.0)
         ax.set_title(title)
     fig.suptitle("Aggregate Metric Distributions", fontsize=13)
-    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
     fig.savefig(out_dir / "plot_metric_distributions.png", bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
 
@@ -530,7 +532,7 @@ def _save_comparison_plots(rows: list[dict[str, Any]], out_dir: Path) -> None:
 
     fig, ax = plt.subplots(figsize=(9, 5.5), dpi=150)
     data = [[float(r["score"]) for r in grouped[s]] for s in labels]
-    ax.boxplot(data, labels=labels, showmeans=True)
+    ax.boxplot(data, tick_labels=labels, showmeans=True)
     ax.set_title("Score Distribution by Strategy")
     ax.grid(axis="y", alpha=0.25)
     fig.tight_layout()

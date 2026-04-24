@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import torch
 from torch import nn
@@ -51,6 +51,13 @@ class TrainConfig:
     monitor_mode: str = "min"
     min_epochs_for_early_stop: int = 10
     patience_for_early_stop: int = 8
+
+
+def _shared_params_snapshot(model: nn.Module) -> torch.Tensor | None:
+    sp = getattr(model, "shared_params", None)
+    if isinstance(sp, torch.Tensor):
+        return sp.detach().cpu()
+    return None
 
 
 def _device() -> torch.device:
@@ -163,9 +170,10 @@ def train_inverse_model(
         ] if shared_raw else [{"params": network_params, "lr": train_config.lr}],
         weight_decay=train_config.weight_decay,
     )
+    scheduler_mode = cast(Literal["min", "max"], train_config.monitor_mode)
     scheduler = ReduceLROnPlateau(
         opt,
-        mode=train_config.monitor_mode,
+        mode=scheduler_mode,
         factor=train_config.scheduler_factor,
         patience=train_config.scheduler_patience,
         threshold=train_config.early_stop_min_delta,
@@ -263,7 +271,7 @@ def train_inverse_model(
                 ) ** 0.5
                 elec_prob = torch.sigmoid(electrode_logits)
                 lr_now = opt.param_groups[0]["lr"]
-                sp = model.shared_params.detach().cpu() if hasattr(model, "shared_params") else None
+                sp = _shared_params_snapshot(model)
                 sp_str = (
                     f"a={sp[0]:.1f} b={sp[1]:.1f} o={sp[2]:.1f} s={sp[3]:.1f}"
                     if sp is not None else "N/A"
@@ -326,7 +334,7 @@ def train_inverse_model(
         else:
             epochs_without_improvement += 1
 
-        sp = model.shared_params.detach().cpu() if hasattr(model, "shared_params") else None
+        sp = _shared_params_snapshot(model)
         sp_str = (
             f"[a={sp[0]:.1f} b={sp[1]:.1f} o={sp[2]:.1f} s={sp[3]:.1f}]"
             if sp is not None else ""

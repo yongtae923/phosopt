@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sized, cast
 
 import numpy as np
 import torch
@@ -99,7 +99,7 @@ def make_splits(dataset: Dataset, config: SplitConfig) -> tuple[Subset, Subset, 
     """Create deterministic train/val/test subsets for single-subject protocol."""
     config.validate()
 
-    n = len(dataset)
+    n = len(cast(Sized, dataset))
     idx = np.arange(n)
     rng = np.random.default_rng(config.seed)
     rng.shuffle(idx)

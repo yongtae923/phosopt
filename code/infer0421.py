@@ -23,6 +23,7 @@ import sys
 import time
 import csv
 from pathlib import Path
+from typing import Any, Callable
 
 # Work around duplicate OpenMP runtime initialization on some Windows setups.
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
@@ -75,7 +76,7 @@ class MetricsTracker:
 metrics_tracker = MetricsTracker()
 
 # Original simulator forward method
-_original_simulator_forward = None
+_original_simulator_forward: Callable[..., Any] | None = None
 
 
 def _wrap_simulator(simulator: torch.nn.Module) -> None:
@@ -84,6 +85,8 @@ def _wrap_simulator(simulator: torch.nn.Module) -> None:
     _original_simulator_forward = simulator.forward
     
     def wrapped_forward(*args, **kwargs):
+        if _original_simulator_forward is None:
+            raise RuntimeError("Simulator forward wrapper not initialized")
         metrics_tracker.simulator_calls += 1
         start = time.time()
         result = _original_simulator_forward(*args, **kwargs)
@@ -208,7 +211,7 @@ def _save_aggregate_plots(rows: list[dict[str, float | int | str]], out_dir: Pat
         ax.axvline(float(vals.mean()), linestyle="--", linewidth=1.0)
         ax.set_title(title)
     fig.suptitle("Aggregate Metric Distributions", fontsize=13)
-    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.97))
     fig.savefig(out_dir / "plot_metric_distributions.png", bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
 
